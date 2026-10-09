@@ -18,7 +18,7 @@ const bank=fs.readFileSync(path.join(SITE,"bank.bin"));
 const errs=[];
 let blobSource = null;
 const dom=new JSDOM(`<!doctype html><html><head><meta charset="utf-8"></head><body>${html}</body></html>`,{
-  runScripts:"dangerously",pretendToBeVisual:true,url:"https://x.github.io/s/",
+  runScripts:"dangerously",pretendToBeVisual:true,url:"https://x.github.io/113114sat/",
   beforeParse(w){
     w.fetch=async()=>({ok:true,status:200,arrayBuffer:async()=>bank.buffer.slice(bank.byteOffset,bank.byteOffset+bank.byteLength)});
     w.DecompressionStream=DecompressionStream;w.Blob=Blob;w.Response=Response;

@@ -6,3 +6,7 @@ node_modules
 package-lock.json
 package.json
 启动.command
+# 个人记录绝不进仓库（导出进度 / 原样备份）
+band-seven-*.json
+*进度*.json
+*备份*.json

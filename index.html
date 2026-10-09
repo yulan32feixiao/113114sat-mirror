@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Band Seven</title>
 <meta name="description" content="3,311 道 College Board 官方数字 SAT 题，按考点与官方分数段出题，带官方解析、错题集间隔复习和 AI 逐题拆解。">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -63,6 +64,8 @@ button{font:inherit;color:inherit;cursor:pointer;border:none;background:none}
   padding:0 20px;height:52px;background:var(--surface);border-bottom:1px solid var(--rule)}
 .brand{display:flex;align-items:baseline;gap:9px;font-weight:700;letter-spacing:-.02em;font-size:15px}
 .brand .mk{width:9px;height:9px;background:var(--accent);border-radius:1px;transform:translateY(-1px)}
+.brand .mirrortag{font-size:10.5px;font-weight:600;letter-spacing:.04em;padding:1px 6px;border-radius:3px;
+  background:var(--accent);color:var(--surface);transform:translateY(-1px);cursor:help}
 nav.tabs{display:flex;gap:2px;margin-left:6px}
 nav.tabs button{padding:6px 11px;border-radius:var(--r);color:var(--ink-2);font-weight:500;font-size:13px}
 nav.tabs button:hover{background:var(--surface-2);color:var(--ink)}
@@ -703,6 +706,13 @@ textarea.pref{font:inherit;font-size:13.5px;line-height:1.6;width:100%;padding:1
 "use strict";
 const PULLED_ON = "2026-09-09";
 const BANK_URL = "bank.bin";     // gzip 的题库，与 index.html 同目录
+/* 存储命名空间。正式站（/113114sat/）用 "b7"；镜像站和本地开发一律用 "b7m"。
+   镜像站和正式站同在 yulan32feixiao.github.io 这个源下，共用一块 localStorage ——
+   不分开的话，镜像上改出来的任何 bug 都会直接写坏正式站的记录。
+   判断写成「不是正式站就隔离」：仓库改名、换地方部署，最坏也只是看不到旧数据，不会写坏。 */
+const PROD_NS = "b7";
+const NS = /^\/113114sat(\/|$)/.test(location.pathname) ? PROD_NS : "b7m";
+const IS_MIRROR = NS !== PROD_NS;
 
 /* ============ official reference data (verified against College Board sources) ============ */
 // Skills Insight for the SAT Suite, July 2026, Table 3
@@ -822,7 +832,7 @@ const RS_STEPS = [0.85, 1, 1.15, 1.3, 1.5, 1.75];
 let rsIdx = 1;
 function applyScale(){
   document.documentElement.style.setProperty("--rs", RS_STEPS[rsIdx]);
-  try{ localStorage.setItem("b7_rs", String(rsIdx)); }catch(e){}
+  try{ localStorage.setItem(NS+"_rs", String(rsIdx)); }catch(e){}
   document.querySelectorAll(".sizectl .lbl").forEach(l=>
     l.textContent = Math.round(RS_STEPS[rsIdx]*100)+"%");
   document.querySelectorAll(".sizectl button").forEach(b=>{
@@ -842,10 +852,10 @@ function sizeControl(){
   return w;
 }
 
-function toast(msg){
+function toast(msg, ms){
   const old=$("#toast"); if(old) old.remove();
   const t=el("div"); t.id="toast"; t.textContent=msg; document.body.appendChild(t);
-  setTimeout(()=>t.remove(),2600);
+  setTimeout(()=>t.remove(), ms||2600);
 }
 
 /* ============ boot ============ */
@@ -870,7 +880,17 @@ async function boot(){
   }
   BANK.forEach(q=>BYID[q.id]=q);
   buildSkillIndex();
-  try{ const v=+localStorage.getItem("b7_rs"); if(v>=0 && v<RS_STEPS.length) rsIdx=v; }catch(e){}
+  // 镜像站第一次打开：镜像这边还什么都没有，就把正式站的账号整套复制过来
+  let mirrorNote = "";
+  if(IS_MIRROR){
+    markMirror();
+    if(!mirrorInfo() && !localStorage.getItem(NS+"_users") && nsKeys(PROD_NS).length){
+      const r = copyFromProd();
+      mirrorNote = r.ok ? `镜像站：已从正式站复制 ${r.profiles} 个档案的全部记录（${kb(r.chars)}）`
+                        : "镜像站：没能从正式站复制 —— "+r.why;
+    }
+  }
+  try{ const v=+localStorage.getItem(NS+"_rs"); if(v>=0 && v<RS_STEPS.length) rsIdx=v; }catch(e){}
   $("#topsize").appendChild(sizeControl());
   applyScale();
   initVocabSelection();
@@ -882,11 +902,23 @@ async function boot(){
   const who = resolveProfile();
   if(who){
     CURRENT = who;
-    lsSet("b7_session", who); lsSet("b7_last", who);
+    lsSet(NS+"_session", who); lsSet(NS+"_last", who);
     let note = "";
     if(hasLegacy()){ const n = migrateLegacy(); if(n) note = `已把之前 ${n} 项记录放进「${who}」`; }
     enterApp(note);
-  }else showPicker();
+  }else{ showPicker(); if(IS_MIRROR) markMirror(); }
+  if(mirrorNote) toast(mirrorNote, 6000);
+}
+
+/* 镜像站要一眼能认出来，免得在镜像上做的题以为进了正式站 */
+function markMirror(){
+  document.title = "Band Seven · 镜像";
+  document.querySelectorAll(".brand").forEach(b=>{
+    if(b.querySelector(".mirrortag")) return;
+    const t = el("span","mirrortag","镜像");
+    t.title = "这是开发用的镜像站，记录和正式站分开存。设置 → 数据体检 里可以重新从正式站复制。";
+    b.appendChild(t);
+  });
 }
 
 function enterApp(note){
@@ -916,11 +948,11 @@ function buildSkillIndex(){
    只是每次打开都要输一遍，徒增麻烦 —— 所以直接取消，打开就进，顶栏可以随时换人。
    档案之间的进度完全独立，也不会跨设备同步。 */
 let CURRENT = null;
-const K = name => "b7:" + (CURRENT||"_guest") + ":" + name;
+const K = name => NS+":" + (CURRENT||"_guest") + ":" + name;
 const DEFAULT_PROFILE = "我";
 
-const users     = ()=> lsGet("b7_users", {});
-const setUsers  = u => lsSet("b7_users", u);
+const users     = ()=> lsGet(NS+"_users", {});
+const setUsers  = u => lsSet(NS+"_users", u);
 const profileNames = ()=> Object.keys(users());
 
 function createProfile(name){
@@ -940,8 +972,8 @@ function renameProfile(oldName, newName){
   if(newName===oldName) return oldName;
   if(!newName.length) throw new Error("名字不能是空的");
   if(u[newName]) throw new Error("已经有一个叫「"+newName+"」的档案了");
-  // 记录是按 "b7:<名字>:<键>" 存的，改名要把键一起搬过去
-  const pre = "b7:"+oldName+":";
+  // 记录是按 "<NS>:<名字>:<键>" 存的，改名要把键一起搬过去
+  const pre = NS+":"+oldName+":";
   const moves = [];
   for(let i=0;i<localStorage.length;i++){
     const k = localStorage.key(i);
@@ -949,18 +981,18 @@ function renameProfile(oldName, newName){
   }
   moves.forEach(k=>{
     const v = localStorage.getItem(k);
-    localStorage.setItem("b7:"+newName+":"+k.slice(pre.length), v);
+    localStorage.setItem(NS+":"+newName+":"+k.slice(pre.length), v);
     localStorage.removeItem(k);
   });
   u[newName] = u[oldName]; delete u[oldName];
   setUsers(u);
-  if(CURRENT===oldName){ CURRENT = newName; lsSet("b7_session", newName); lsSet("b7_last", newName); }
+  if(CURRENT===oldName){ CURRENT = newName; lsSet(NS+"_session", newName); lsSet(NS+"_last", newName); }
   return newName;
 }
 function deleteProfile(name){
   const u = users();
   if(!u[name]) return;
-  const pre = "b7:"+name+":";
+  const pre = NS+":"+name+":";
   const kill = [];
   for(let i=0;i<localStorage.length;i++){
     const k = localStorage.key(i);
@@ -971,7 +1003,7 @@ function deleteProfile(name){
 }
 function switchProfile(name){
   if(!users()[name]) return;
-  lsSet("b7_session", name); lsSet("b7_last", name);
+  lsSet(NS+"_session", name); lsSet(NS+"_last", name);
   location.reload();        // 整页重来最干净：所有内存里的数组都要换一套
 }
 
@@ -979,7 +1011,7 @@ function switchProfile(name){
 function accountSummary(){
   const all = users();
   return Object.keys(all).map(name=>{
-    const g = k=>{ try{ const v=localStorage.getItem("b7:"+name+":"+k); if(v==null) return 0;
+    const g = k=>{ try{ const v=localStorage.getItem(NS+":"+name+":"+k); if(v==null) return 0;
       const p=JSON.parse(v); return Array.isArray(p)?p.length:(p&&typeof p==="object"?Object.keys(p).length:0);
     }catch(e){ return 0; } };
     return {name, attempts:g("attempts"), sessions:g("sessions"),
@@ -1001,14 +1033,14 @@ function setUserLevel(level){
 }
 
 /* 把档案系统之前的老数据搬进第一个档案 */
-const LEGACY = ["b7_attempts","b7_review","b7_notes","b7_settings","b7_sessions","b7_papers","b7_marks"];
+const LEGACY = [NS+"_attempts",NS+"_review",NS+"_notes",NS+"_settings",NS+"_sessions",NS+"_papers",NS+"_marks"];
 function hasLegacy(){ return LEGACY.some(k=>localStorage.getItem(k)!=null); }
 function migrateLegacy(){
   let moved = 0;
   LEGACY.forEach(k=>{
     const v = localStorage.getItem(k);
     if(v==null) return;
-    const name = k.replace("b7_","");
+    const name = k.replace(NS+"_","");
     if(localStorage.getItem(K(name))==null){ localStorage.setItem(K(name), v); moved++; }
     localStorage.removeItem(k);
   });
@@ -1020,13 +1052,109 @@ function migrateLegacy(){
    返回 null 表示「有好几个档案、但不知道这次是谁」，交给选人面板。 */
 function resolveProfile(){
   const all = users(), names = Object.keys(all);
-  const sess = lsGet("b7_session","");
+  const sess = lsGet(NS+"_session","");
   if(sess && all[sess]) return sess;
-  const last = lsGet("b7_last","");
+  const last = lsGet(NS+"_last","");
   if(last && all[last]) return last;
   if(names.length === 1) return names[0];
   if(names.length === 0) return createProfile(DEFAULT_PROFILE);
   return null;
+}
+
+/* ============ 整个命名空间的搬运：镜像复制 / 原样备份 / 原样恢复 ============
+   一个命名空间 = localStorage 里所有 "<ns>_xxx"（全局）和 "<ns>:<档案>:<键>"（每个档案）的键。
+   三件事都归结为「把本命名空间整体换成另一份」，共用 replaceNamespace：
+   先算空间、再写，写到一半爆了就整体回滚到原样。 */
+const MIRROR_MAX_CHARS = 3e6;   // 复制后整个源最多占这么多字符。Chrome 上限约 520 万，留出一半给正式站继续长
+function nsKeys(ns){
+  const out = [];
+  for(let i=0;i<localStorage.length;i++){
+    const k = localStorage.key(i);
+    if(k && (k.startsWith(ns+"_") || k.startsWith(ns+":"))) out.push(k);
+  }
+  return out;
+}
+function storageChars(keys){
+  let n = 0;
+  (keys || Array.from({length:localStorage.length}, (_,i)=>localStorage.key(i))).forEach(k=>{
+    if(k!=null) n += k.length + (localStorage.getItem(k)||"").length;
+  });
+  return n;
+}
+const kb = n => (n/1024).toFixed(0)+" KB";
+/* pairs: [[去掉前缀的尾巴, 值], …]，尾巴形如 "_users" 或 ":我:attempts" */
+function replaceNamespace(pairs){
+  const old = nsKeys(NS);
+  const add = pairs.reduce((n,[t,v])=>n + NS.length + t.length + v.length, 0);
+  const after = storageChars() - storageChars(old) + add;
+  if(after > MIRROR_MAX_CHARS)
+    return {ok:false, why:`写入后这个网址下的存储会到 ${kb(after)}，超过安全线 ${kb(MIRROR_MAX_CHARS)}，怕挤掉正式站的空间，没有写`};
+  const backup = old.map(k=>[k, localStorage.getItem(k)]);
+  try{
+    old.forEach(k=>localStorage.removeItem(k));
+    pairs.forEach(([t,v])=>localStorage.setItem(NS+t, v));
+  }catch(e){
+    nsKeys(NS).forEach(k=>localStorage.removeItem(k));
+    backup.forEach(([k,v])=>{ try{ localStorage.setItem(k,v); }catch(_){} });
+    return {ok:false, why:"浏览器存储空间不够，已经撤回，原来的数据没动"};
+  }
+  return {ok:true, keys:pairs.length, chars:add};
+}
+
+/* ---- 镜像站：把正式站的账号原样复制过来（只读正式站，绝不写它） ---- */
+function copyFromProd(){
+  if(!IS_MIRROR) return {ok:false, why:"这里就是正式站"};
+  const src = nsKeys(PROD_NS);
+  if(!src.length) return {ok:false, why:"这个浏览器里没有正式站的数据（要在平时做题的那个浏览器里打开镜像站）"};
+  const pairs = src.map(k=>[k.slice(PROD_NS.length), localStorage.getItem(k)]);
+  const r = replaceNamespace(pairs);
+  if(!r.ok) return r;
+  lsSet(NS+"_mirror", {copiedAt:Date.now(), keys:r.keys, chars:r.chars});
+  r.profiles = Object.keys(users()).length;
+  return r;
+}
+const mirrorInfo = ()=> lsGet(NS+"_mirror", null);
+
+/* ---- 原样备份：这个命名空间下的全部东西（作答、错题、笔记、标记、划线、生词本、AI 对话、设置…）。
+   「导出进度」只带作答/错题/笔记三样，换电脑会丢生词本和标记，这个不会。
+   API key 一律抹掉；恢复时如果本机已经配了同一个供应商，沿用本机的 key。 */
+function stripSecrets(tail, v){
+  try{
+    if(/:providers$/.test(tail)){ const a=JSON.parse(v); if(Array.isArray(a)){ a.forEach(p=>{ if(p) p.key=""; }); return JSON.stringify(a); } }
+    if(/:settings$/.test(tail)){ const o=JSON.parse(v); if(o&&typeof o==="object"){ o.key=""; return JSON.stringify(o); } }
+  }catch(e){}
+  return v;
+}
+function rawBackup(){
+  const data = {};
+  nsKeys(NS).forEach(k=>{ const t=k.slice(NS.length); data[t] = stripSecrets(t, localStorage.getItem(k)); });
+  return {_format:"band-seven-raw", _version:1, exportedAt:new Date().toISOString(), from:NS, data};
+}
+function exportRaw(){
+  const b = rawBackup();
+  saveFile("band-seven-原样备份-"+todayKey()+".json",
+           new Blob([JSON.stringify(b)], {type:"application/json"}));
+  toast(`已导出 ${Object.keys(b.data).length} 项（不含 API key）`);
+}
+function restoreRaw(d){
+  if(!d || d._format!=="band-seven-raw" || !d.data || typeof d.data!=="object")
+    return {ok:false, why:"这不是「原样备份」文件"};
+  const pairs = Object.entries(d.data).filter(([t,v])=>
+    typeof v==="string" && /^(_[\w-]+|:[^:]+:[\w-]+)$/.test(t));
+  if(!pairs.length) return {ok:false, why:"备份里没有可用的数据"};
+  // 本机已经配好的 API key 不能被备份里的空 key 冲掉
+  const keep = {};
+  nsKeys(NS).filter(k=>/:providers$/.test(k)).forEach(k=>{
+    (lsGet(k, [])||[]).forEach(p=>{ if(p&&p.id&&p.key) keep[k.slice(NS.length)+"|"+p.id]=p.key; });
+  });
+  pairs.forEach(pr=>{
+    if(!/:providers$/.test(pr[0])) return;
+    try{ const a=JSON.parse(pr[1]);
+      a.forEach(p=>{ if(p&&!p.key&&keep[pr[0]+"|"+p.id]) p.key=keep[pr[0]+"|"+p.id]; });
+      pr[1]=JSON.stringify(a);
+    }catch(e){}
+  });
+  return replaceNamespace(pairs);
 }
 
 /* ---------- 选人：只在「有好几个档案又不知道是谁」时出现一次，点一下就进 ---------- */
@@ -1044,7 +1172,7 @@ function showPicker(){
     const b2 = el("button","recoveritem");
     b2.innerHTML = `<span class="rname">${esc(a.name)}</span>
       <span class="rstat num">${a.attempts} 条作答 · ${a.sessions} 场 · ${a.review} 道错题</span>`;
-    b2.onclick=()=>{ lsSet("b7_session", a.name); lsSet("b7_last", a.name);
+    b2.onclick=()=>{ lsSet(NS+"_session", a.name); lsSet(NS+"_last", a.name);
                      CURRENT = a.name; gate.remove(); enterApp(""); };
     wrap.appendChild(b2);
   });
@@ -1053,7 +1181,7 @@ function showPicker(){
   add.onclick=()=>{
     const v = prompt("新档案的名字（随便起，只是用来区分记录）：", "");
     if(v==null) return;
-    try{ const n=createProfile(v); lsSet("b7_session",n); lsSet("b7_last",n);
+    try{ const n=createProfile(v); lsSet(NS+"_session",n); lsSet(NS+"_last",n);
          CURRENT=n; gate.remove(); enterApp("已建好档案「"+n+"」"); }
     catch(e){ toast(e.message); }
   };
@@ -1096,7 +1224,7 @@ function openProfilePop(anchor){
         if(!confirm(`删除档案「${a.name}」？它的 ${a.attempts} 条作答、${a.sessions} 场练习、${a.review} 道错题会一起删掉，无法撤销。`)) return;
         const wasCurrent = a.name===CURRENT;
         deleteProfile(a.name);
-        if(wasCurrent){ lsSet("b7_session", profileNames()[0]); return location.reload(); }
+        if(wasCurrent){ lsSet(NS+"_session", profileNames()[0]); return location.reload(); }
         draw();
       };
       row.appendChild(del);
@@ -4276,7 +4404,7 @@ function applyHighlights(root, qid){
 /* ============ 可拖拽分栏 ============ */
 let splitRatio = 50;
 function initSplit(){
-  const v = +lsGet("b7_split", 50);
+  const v = +lsGet(NS+"_split", 50);
   if(v>=20 && v<=80) splitRatio = v;
 }
 const IDX_W = 170, CALC_W = 290, AI_W = 380;
@@ -4312,10 +4440,10 @@ function makeSplitter(body){
     if(!dragging) return;
     dragging = false;
     document.body.classList.remove("dragging");
-    lsSet("b7_split", splitRatio);
+    lsSet(NS+"_split", splitRatio);
   };
   h.onmousedown = e=>{ e.preventDefault(); dragging=true; document.body.classList.add("dragging"); };
-  h.ondblclick = ()=>{ splitRatio = 50; applySplit(body); lsSet("b7_split", 50); };
+  h.ondblclick = ()=>{ splitRatio = 50; applySplit(body); lsSet(NS+"_split", 50); };
   document.addEventListener("mousemove", move);
   document.addEventListener("mouseup", up);
   h.addEventListener("touchstart", e=>{ dragging=true; }, {passive:true});
@@ -5370,8 +5498,8 @@ function renderImport(app){
    没有服务器，所有记录都在本机 localStorage。这个面板把实际存了什么原样列出来，
    并处理一种真实会发生的情况：账户系统上线前的数据存在无前缀的旧键里，
    当时如果走的是「登录」而不是「注册」，迁移不会触发，数据就留在旧键没搬过来。 */
-const LEGACY_KEYS = ["b7_attempts","b7_review","b7_notes","b7_settings","b7_sessions",
-                     "b7_papers","b7_marks","b7_hls","b7_vocab","b7_threads","b7_mastered"];
+const LEGACY_KEYS = [NS+"_attempts",NS+"_review",NS+"_notes",NS+"_settings",NS+"_sessions",
+                     NS+"_papers",NS+"_marks",NS+"_hls",NS+"_vocab",NS+"_threads",NS+"_mastered"];
 
 function scanStorage(){
   const out = {accounts:{}, legacy:{}, other:{}, totalBytes:0};
@@ -5382,10 +5510,10 @@ function scanStorage(){
     let n = null;
     try{ const p=JSON.parse(v); n = Array.isArray(p)? p.length : (p&&typeof p==="object"? Object.keys(p).length : null); }catch(e){}
     const rec = {bytes:v.length, count:n};
-    const m = k.match(/^b7:([^:]+):(.+)$/);
+    const m = k.match(new RegExp("^"+NS+":([^:]+):(.+)$"));
     if(m){ (out.accounts[m[1]] = out.accounts[m[1]] || {})[m[2]] = rec; }
     else if(LEGACY_KEYS.includes(k)) out.legacy[k] = rec;
-    else if(k.startsWith("b7")) out.other[k] = rec;
+    else if(k.startsWith(NS+"_")) out.other[k] = rec;
   }
   return out;
 }
@@ -5395,7 +5523,7 @@ function adoptLegacy(){
   LEGACY_KEYS.forEach(k=>{
     const v = localStorage.getItem(k);
     if(v==null) return;
-    const name = k.replace("b7_","");
+    const name = k.replace(NS+"_","");
     const target = K(name);
     const existing = localStorage.getItem(target);
     if(existing==null){ localStorage.setItem(target, v); moved.push(name+"（搬入）"); }
@@ -5426,10 +5554,34 @@ function renderDiag(app){
   const card = el("div","builder");
   const s = scanStorage();
 
+  if(IS_MIRROR){
+    const mi = mirrorInfo(), prodN = nsKeys(PROD_NS).length;
+    const box = el("div","gnote");
+    box.innerHTML = `<b>这是镜像站</b>，记录和正式站分开存（前缀 <code>${NS}</code>，正式站是 <code>${PROD_NS}</code>）。
+      在这里做题、改设置都不会影响正式站。<br>` +
+      (mi ? `上次从正式站复制：${new Date(mi.copiedAt).toLocaleString()}，${mi.keys} 项 · ${kb(mi.chars)}。`
+          : "还没有从正式站复制过。") +
+      (prodN ? ` 正式站现在有 ${prodN} 项 · ${kb(storageChars(nsKeys(PROD_NS)))}。`
+             : " 这个浏览器里找不到正式站的数据。");
+    if(prodN){
+      const go = el("button","ghost","从正式站重新复制（覆盖镜像里的记录）");
+      go.style.marginTop="9px";
+      go.onclick=()=>{
+        if(!confirm("用正式站现在的数据整体替换镜像里的全部记录？镜像这边做过的题会被覆盖。正式站不受影响。")) return;
+        const r = copyFromProd();
+        if(!r.ok) return toast("没有复制：" + r.why, 5000);
+        toast(`已复制 ${r.profiles} 个档案（${kb(r.chars)}），正在重新载入…`);
+        setTimeout(()=>location.reload(), 600);
+      };
+      box.appendChild(el("br")); box.appendChild(go);
+    }
+    card.appendChild(box);
+  }
+
   const legacyN = Object.keys(s.legacy).length;
   if(legacyN){
     const warn = el("div","gnote");
-    const att = s.legacy["b7_attempts"];
+    const att = s.legacy[NS+"_attempts"];
     warn.innerHTML = `<b>发现 ${legacyN} 项没有归属账户的旧数据</b>${
       att&&att.count!=null? `，其中作答记录 <b>${att.count}</b> 条` : ""}。
       这是账户系统上线前存下的。点下面的按钮搬进当前账户「${esc(CURRENT)}」——
@@ -5709,8 +5861,29 @@ function renderSettings(app){
   };
   row.appendChild(wipe);
   c3.appendChild(row);
+  // 原样备份：所有档案的全部东西，换电脑 / 搬到本地开发环境不丢生词本、标记、划线
+  const row2 = el("div","btnrow"); row2.style.justifyContent="flex-start"; row2.style.marginTop="10px";
+  const rx2 = el("button","ghost","原样备份（全部档案、全部数据）"); rx2.onclick=exportRaw;
+  const rawIn = el("input"); rawIn.type="file"; rawIn.accept="application/json,.json"; rawIn.className="hide";
+  rawIn.onchange=()=>{
+    const f = rawIn.files[0]; rawIn.value=""; if(!f) return;
+    const fr = new FileReader();
+    fr.onload = ()=>{
+      let d; try{ d = JSON.parse(fr.result); }catch(e){ return toast("文件不是合法的 JSON"); }
+      const r = restoreRaw(d);
+      if(!r.ok) return toast("没有恢复：" + r.why, 5000);
+      toast(`已恢复 ${r.keys} 项，正在重新载入…`);
+      setTimeout(()=>location.reload(), 600);
+    };
+    fr.readAsText(f);
+  };
+  const rr2 = el("button","ghost","从原样备份恢复");
+  rr2.onclick=()=>{ if(confirm("恢复会用备份整体替换这里所有档案的全部记录（本机已配的 API key 会保留），确定？")) rawIn.click(); };
+  row2.appendChild(rx2); row2.appendChild(rr2); row2.appendChild(rawIn);
+  c3.appendChild(row2);
   c3.appendChild(el("div","hint",
-    "导出的文件不含 API key。浏览器清缓存、换浏览器、无痕窗口都会丢记录，建议每周导出一次。"));
+    "导出的文件不含 API key。浏览器清缓存、换浏览器、无痕窗口都会丢记录，建议每周导出一次。"+
+    "「导出进度」只带作答、错题、拆解三样；「原样备份」带全部（生词本、标记、划线、AI 对话、设置都在）。"));
   b3.appendChild(c3); app.appendChild(b3);
 
   /* --- 数据来源 / 数据体检 --- */

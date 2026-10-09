@@ -8,7 +8,7 @@ const SITE=process.env.SITE_DIR||path.resolve(__dirname,"..");
 const html=fs.readFileSync(path.join(SITE,"index.html"),"utf8");
 const bank=fs.readFileSync(path.join(SITE,"bank.bin"));
 const dom=new JSDOM(`<!doctype html><html><head><meta charset="utf-8"></head><body>${html}</body></html>`,{
-  runScripts:"dangerously",pretendToBeVisual:true,url:"https://x.github.io/s/",
+  runScripts:"dangerously",pretendToBeVisual:true,url:"https://x.github.io/113114sat/",
   beforeParse(w){w.fetch=async()=>({ok:true,status:200,arrayBuffer:async()=>bank.buffer.slice(bank.byteOffset,bank.byteOffset+bank.byteLength)});
     w.DecompressionStream=DecompressionStream;w.Blob=Blob;w.Response=Response;w.TextEncoder=TextEncoder;w.TextDecoder=TextDecoder;
     Object.defineProperty(w,"crypto",{value:require("crypto").webcrypto,configurable:true});
