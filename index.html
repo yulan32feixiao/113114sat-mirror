@@ -357,21 +357,7 @@
         </div>
         <button onclick="switchView('dashboard')" class="px-4 py-2 border rounded-lg text-xs font-semibold hover:bg-slate-50">返回主页</button>
       </div>
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 mt-6">
-        <div class="bg-white p-6 rounded-xl border border-slate-200 text-center shadow-xs">
-          <div class="text-xs text-slate-400 font-bold uppercase">预测总分区间</div>
-          <div class="text-4xl font-extrabold text-slate-900 mt-2" id="rep-tot">1420</div>
-          <div class="text-xs text-slate-500 mt-1">基于自适应做题表现</div>
-        </div>
-        <div class="bg-white p-6 rounded-xl border border-slate-200">
-          <div class="flex justify-between text-xs font-bold"><span>Reading & Writing</span> <span class="text-[#144e4b]" id="rep-rw">690</span></div>
-          <div class="w-full bg-slate-100 h-2 rounded-full mt-2"><div class="bg-[#144e4b] h-full rounded-full" style="width: 85%"></div></div>
-        </div>
-        <div class="bg-white p-6 rounded-xl border border-slate-200">
-          <div class="flex justify-between text-xs font-bold"><span>Math</span> <span class="text-[#144e4b]" id="rep-m">730</span></div>
-          <div class="w-full bg-slate-100 h-2 rounded-full mt-2"><div class="bg-[#8b9a76] h-full rounded-full" style="width: 90%"></div></div>
-        </div>
-      </div>
+            <div id="report-body" class="mt-6"></div>
     </section>
 
     <!-- ----------------- 视图 6: 做题竞技场 (RUNNER) ----------------- -->
@@ -972,8 +958,117 @@
       if (viewName === "mistakes" && typeof renderMistakesView === "function") renderMistakesView();
       if (viewName === "vocab" && typeof renderVocabView === "function") renderVocabView();
       if (viewName === "dashboard" && typeof renderCategoryDetail === "function") renderCategoryDetail(selectedCat);
+      if (viewName === "report" && typeof renderReport === "function") renderReport();
 
       window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    /* ============ 水平评估 ============
+       这一页以前写死着「预测总分 1420 / RW 690 / Math 730」，不管你做没做题、做对没做对
+       都显示这三个数。现在全部由作答记录算出来。
+       关于分数：v2.0 没有官方 Raw Score Conversion Table，专项练习也不是全真结构，
+       所以这里不编分数 —— 只给真实正确率，分数估计留给全真模考。 */
+    function renderReport() {
+      const box = document.getElementById('report-body');
+      if (!box) return;
+      const att = Array.isArray(attempts) ? attempts : [];
+
+      if (!att.length) {
+        box.innerHTML = `
+          <div class="bg-white border border-slate-200 rounded-xl p-10 text-center">
+            <i class="fa-solid fa-chart-line text-4xl text-slate-200"></i>
+            <p class="mt-4 text-slate-700 font-semibold">还没有做题记录</p>
+            <p class="mt-1 text-sm text-slate-500">做完一组专项练习，这里会按专项显示你的真实正确率和用时分布。</p>
+            <button onclick="switchView('dashboard')"
+              class="mt-5 px-4 py-2 bg-[#144e4b] text-white rounded-lg text-sm font-semibold hover:bg-[#0e3b38]">去做一组</button>
+          </div>`;
+        return;
+      }
+
+      const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+      const card = (label, value, sub) => `
+        <div class="bg-white p-5 rounded-xl border border-slate-200 text-center">
+          <div class="text-[11px] text-slate-400 font-bold uppercase tracking-wide">${label}</div>
+          <div class="text-3xl font-extrabold text-slate-900 mt-1.5">${value}</div>
+          <div class="text-[11px] text-slate-500 mt-1">${sub}</div>
+        </div>`;
+
+      const okN = att.filter(a => a.ok).length;
+      const msList = att.map(a => a.ms || 0).filter(Boolean);
+      const avgSec = msList.length ? Math.round(msList.reduce((x, y) => x + y, 0) / msList.length / 1000) : 0;
+
+      // 按专项
+      const CAT_CN = { vocab:"词汇", reading:"阅读", grammar:"语法", math:"数学", custom:"个人" };
+      const byCat = {};
+      att.forEach(a => {
+        const c = a.cat || "other";
+        (byCat[c] = byCat[c] || { n:0, ok:0 }).n++;
+        if (a.ok) byCat[c].ok++;
+      });
+      const catRows = Object.entries(byCat).sort((x, y) => y[1].n - x[1].n).map(([c, v]) => {
+        const p = pct(v.ok, v.n);
+        const tone = p >= 80 ? "bg-emerald-500" : p >= 60 ? "bg-amber-500" : "bg-rose-500";
+        return `
+          <div class="py-2.5">
+            <div class="flex justify-between text-xs font-semibold mb-1.5">
+              <span>${CAT_CN[c] || c}</span>
+              <span class="text-slate-500">${v.ok}/${v.n} · ${p}%</span>
+            </div>
+            <div class="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+              <div class="${tone} h-full rounded-full" style="width:${p}%"></div>
+            </div>
+          </div>`;
+      }).join("");
+
+      // 用时 × 对错 四象限
+      const SLOW = a => (a.ms || 0) > (a.sec === 2 ? 95000 : 71000);
+      const FAST = a => (a.ms || 0) > 0 && (a.ms || 0) < 25000;
+      const q = {
+        slowRight: att.filter(a => a.ok && SLOW(a)).length,
+        fastWrong: att.filter(a => !a.ok && FAST(a)).length,
+        slowWrong: att.filter(a => !a.ok && SLOW(a)).length,
+        fastRight: att.filter(a => a.ok && FAST(a)).length,
+      };
+      const quad = (label, n, hint, tone) => `
+        <div class="border border-slate-200 rounded-lg p-3">
+          <div class="flex items-baseline justify-between">
+            <span class="text-xs font-bold ${tone}">${label}</span>
+            <span class="text-xl font-extrabold text-slate-900">${n}</span>
+          </div>
+          <p class="text-[11px] text-slate-500 mt-1 leading-snug">${hint}</p>
+        </div>`;
+
+      box.innerHTML = `
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          ${card("已做题数", att.length, "累计作答")}
+          ${card("正确率", pct(okN, att.length) + "%", okN + " / " + att.length + " 题")}
+          ${card("平均用时", avgSec + " 秒", "官方配速 RW 71s · Math 95s")}
+          ${card("待攻克错题", Object.keys(mistakes || {}).filter(k => !mistakes[k].mastered).length, "错题本里还没毕业的")}
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mt-5">
+          <div class="bg-white p-5 rounded-xl border border-slate-200">
+            <h3 class="text-sm font-bold text-slate-900 mb-1">各专项正确率</h3>
+            <p class="text-[11px] text-slate-400 mb-2">只统计你实际做过的题</p>
+            ${catRows || '<p class="text-xs text-slate-400 py-4">暂无数据</p>'}
+          </div>
+
+          <div class="bg-white p-5 rounded-xl border border-slate-200">
+            <h3 class="text-sm font-bold text-slate-900 mb-1">用时 × 对错</h3>
+            <p class="text-[11px] text-slate-400 mb-3">四种情况要用四种练法，别混成一个「正确率」</p>
+            <div class="grid grid-cols-2 gap-2.5">
+              ${quad("慢而对", q.slowRight, "会做但没形成自动化 —— 同类题限时再练", "text-amber-700")}
+              ${quad("快而错", q.fastWrong, "冲动作答 —— 回原文/题干找依据再选", "text-rose-700")}
+              ${quad("慢而错", q.slowWrong, "概念断层 —— 先补概念本身，别刷题", "text-rose-900")}
+              ${quad("快而对", q.fastRight, "已掌握", "text-emerald-700")}
+            </div>
+          </div>
+        </div>
+
+        <p class="mt-5 text-[11px] text-slate-400 leading-relaxed">
+          这里<b>不给分数预测</b>。SAT 换算要用官方 Raw Score Conversion Table，而且必须是全真结构（R&amp;W 54 题 + Math 44 题、两段自适应）；
+          专项练习的正确率换不出有意义的分数。想要估分请做「全真模考」。
+        </p>`;
     }
 
     // ================= 全真模考启动器 (MOCK RUNNER) =================
