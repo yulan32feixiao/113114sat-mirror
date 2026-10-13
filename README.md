@@ -1,4 +1,4 @@
-# Band Seven · 镜像站
+# SAT v2.0 · 镜像站
 
 > **这是开发用的镜像站**，从正式站 [`113114sat`](https://github.com/yulan32feixiao/113114sat)（[在线](https://yulan32feixiao.github.io/113114sat/)）完整复制而来，包括全部提交历史。
 > 新功能先在这里改、在这里验，稳定了再合回正式站。镜像地址：<https://yulan32feixiao.github.io/113114sat-mirror/>
@@ -14,7 +14,7 @@
 >
 > 命名空间按路径自动判断：路径是 `/113114sat/` 就用 `b7`，其它任何地方（镜像、本地、改名后的仓库）一律 `b7m`。所以同一份代码合回正式站时不用改任何一行。
 
-# Band Seven
+# SAT v2.0
 
 数字 SAT 定向刷题工具。3,311 道 College Board 官方题，按考点和官方分数段出题，带官方逐选项解析、错题集间隔复习、AI 逐题拆解和 Word 导出。
 
