@@ -10,3 +10,6 @@ package.json
 band-seven-*.json
 *进度*.json
 *备份*.json
+
+# 本地启动脚本不进仓库（376969b 的决定）
+start.sh
