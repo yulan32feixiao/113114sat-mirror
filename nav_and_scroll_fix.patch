@@ -1,0 +1,176 @@
+diff --git a/index.html b/index.html
+index 36f74af..e79d45b 100644
+--- a/index.html
++++ b/index.html
+@@ -810,6 +810,7 @@ const TARGET = {1:750, 2:780};
+ const EXAM_DATE = "2026-12-05";
+ 
+ /* ============ state ============ */
++const VIEWS = ["home","records","log","paper","settings","source","vocab"];
+ let BANK=[], BYID={}, SKILLS=[], attempts=[], run=null, view="home";
+ let settings = {key:"", model:"deepseek-v4-pro", base:"https://api.deepseek.com", pref:"", fb:[]};
+ const hasKey = ()=> activeProviders().length > 0;   // 旧名保留，语义改成「有任何可用供应商」
+@@ -1095,8 +1096,11 @@ function replaceNamespace(pairs){
+     pairs.forEach(([t,v])=>localStorage.setItem(NS+t, v));
+   }catch(e){
+     nsKeys(NS).forEach(k=>localStorage.removeItem(k));
+-    backup.forEach(([k,v])=>{ try{ localStorage.setItem(k,v); }catch(_){} });
+-    return {ok:false, why:"浏览器存储空间不够，已经撤回，原来的数据没动"};
++    let restored = 0;
++    backup.forEach(([k,v])=>{ try{ localStorage.setItem(k,v); restored++; }catch(_){} });
++    const missed = backup.length - restored;
++    return {ok:false, why: missed ? `浏览器存储空间不足导致回滚不完整（${missed} 条未能恢复），请在设置中重新从正式站复制`
++                                  : "浏览器存储空间不够，已经撤回，原来的数据没动"};
+   }
+   return {ok:true, keys:pairs.length, chars:add};
+ }
+@@ -2246,6 +2250,7 @@ function startRun(qs, opt){
+   if(!qs || !qs.length){ toast("没有符合条件的题"); return; }
+   sessionAnalysis = "";
+   opt = Object.assign({}, opt);
++  const fromView = opt.from || (VIEWS.includes(view) ? view : "home");
+   opt.label = autoLabel(qs, opt.label);
+   const blind = opt.blind!=null ? opt.blind : (settings.reveal!=="now");
+   // 勾了「计时」= 按官方配速给整组一个总时限（R&W 71 秒/题、Math 95 秒/题），到点自动交卷。
+@@ -2255,10 +2260,11 @@ function startRun(qs, opt){
+     ? qs.reduce((t,q)=>t + (PACE_S[q.sec]||71), 0) * 1000
+     : 0;
+   run = { qs, i:0, label:opt.label, timed:opt.timed===true, finished:false, review:!!opt.review, blind,
++          from: fromView,
+           deadline: budgetMs ? Date.now()+budgetMs : null, budgetMs,
+           written:[], prevReview:{},
+           sid: "s" + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
+-          state: qs.map(()=>({picked:null, sub:false, ok:null, ms:0, marked:false, struck:[], aid:null, why:null})),
++          state: qs.map(()=>({picked:null, sub:false, ok:null, ms:0, marked:false, struck:[], aid:null, why:null, scrollLeft:0, scrollRight:0})),
+           t0: Date.now(), total0: Date.now() };
+   $("#view-run").classList.remove("hide");
+   document.body.style.overflow="hidden";
+@@ -2328,19 +2334,23 @@ async function cancelRun(){
+ 
+   run.finished = true;
+   if(run._t) clearInterval(run._t);
++  const targetView = (run && run.from) || "home";
+   run = null; mockPlan = null;
+   $("#view-run").classList.add("hide"); $("#view-run").innerHTML="";
+   document.body.style.overflow="";
+   toast("已放弃，没有留下记录");
++  view = targetView;
+   render();
+ }
+ 
+-function closeRun(){
++function closeRun(to){
+   redrawOverlay = null;
++  const targetView = to || (run && run.from) || "home";
+   if(run && run._t) clearInterval(run._t);
+   run=null;
+   $("#view-run").classList.add("hide"); $("#view-run").innerHTML="";
+   document.body.style.overflow="";
++  view = targetView;
+   render();
+ }
+ 
+@@ -2404,6 +2414,12 @@ function tick(){
+ 
+ function drawRun(){
+   const root = $("#view-run");
++  if(run && run.state && run.state[run.i]){
++    const prevLeft = root.querySelector(".pane.left");
++    const prevRight = root.querySelector(".pane:not(.left)");
++    if(prevLeft) run.state[run.i].scrollLeft = prevLeft.scrollTop;
++    if(prevRight) run.state[run.i].scrollRight = prevRight.scrollTop;
++  }
+   const q = run.qs[run.i], st = run.state[run.i];
+   const d = DOMAINS[q.dom];
+   root.innerHTML = "";
+@@ -2476,16 +2492,19 @@ function drawRun(){
+   // body
+   const body = el("div","runbody"+(q.sti?"":" single"));
+   body.dataset.qid = q.id;
++  let leftPane = null, rightPane = null;
+   if(q.sti){
+     const left = el("div","pane left");
+     const li = el("div","pane-inner");
+     li.appendChild(el("div","stimwrap",`<div class="qtext">${q.sti}</div>`));
+     left.appendChild(li); body.appendChild(left);
+     body.appendChild(makeSplitter(body));
++    leftPane = left;
+   }
+   const right = el("div","pane");
+   const ri = el("div","pane-inner"); ri.id="qpane";
+   right.appendChild(ri); body.appendChild(right);
++  rightPane = right;
+   if(calcOpen && q.sec===2){ body.classList.add("withcalc"); body.appendChild(calcPanel()); }
+   if(aiOpen && st.sub && !run.mock){ body.classList.add("withai"); body.appendChild(aiPanel(q, st)); }
+   root.appendChild(body);
+@@ -2576,6 +2595,8 @@ function drawRun(){
+   if(st.sub) drawReview(ri, q, st);
+   applyHighlights(root, q.id);
+   applyScale();
++  if(leftPane && st.scrollLeft) leftPane.scrollTop = st.scrollLeft;
++  if(rightPane && st.scrollRight) rightPane.scrollTop = st.scrollRight;
+ 
+   // footer
+   const foot = el("div","runfoot");
+@@ -3479,6 +3500,15 @@ function drawSummary(n, ok, secs){
+ 
+   const row = el("div","btnrow");
+   if(wrongs.length){
++    const showWrongs = el("button","ghost",`看这次的错题（${wrongs.length} 道）`);
++    const sessionLabel = run ? run.label : "";
++    const sessionSid = run ? run.sid : "";
++    showWrongs.onclick = ()=>{
++      pendingLogFocus = { sid: sessionSid, label: sessionLabel };
++      closeRun("log");
++    };
++    row.appendChild(showWrongs);
++
+     const again = el("button","ghost","只重做这次的错题");
+     again.onclick=()=>{ const qs=wrongs.map(x=>x.q); closeRunSilent(); startRun(qs,{label:run?run.label:"错题重做",timed:false}); };
+     row.appendChild(again);
+@@ -4617,12 +4647,15 @@ function initHistory(){
+     const rv = $("#view-run");
+     if(rv && !rv.classList.contains("hide")){      // 全屏/答题界面：后退 = 退出它
+       if(run && run.mock && !run.finished){ navLock=false; history.pushState({v:view},"","#"+view); return; }
++      const targetView = (run && run.from) || "home";
+       rv.classList.add("hide"); rv.innerHTML=""; document.body.style.overflow="";
+       run = null; mockPlan = null;
++      view = targetView;
+       render(); navLock = false; return;
+     }
+-    const v = (ev.state && ev.state.v) || (location.hash||"#home").slice(1) || "home";
+-    if(["home","records","log","paper","settings","source","vocab"].includes(v)){ view = v; render(); }
++    const rawHash = (location.hash||"#home").slice(1);
++    const v = (ev.state && ev.state.v) || rawHash.split("?")[0] || "home";
++    if(VIEWS.includes(v)){ view = v; render(); }
+     navLock = false;
+   });
+ }
+@@ -4835,7 +4868,8 @@ function renderRecords(app){
+ 
+ /* ============ 错题本 / 标记 ============ */
+ let logFilter = {sec:0, dom:"", onlyDue:false, hideMastered:true};
+-let folder = {by:"skill", val:""};    // skill | session | month | all —— 默认按题型分
++let folder = {by:"skill", val:""};
++let pendingLogFocus = null;    // skill | session | month | all —— 默认按题型分
+ function toggleMastered(qid){
+   if(mastered[qid]) delete mastered[qid];
+   else { mastered[qid] = Date.now(); delete reviewQ[qid]; flushReview(); }
+@@ -4989,6 +5023,17 @@ function openFullscreen(qs, label, startIdx, opt){
+ }
+ 
+ function renderLog(app){
++  if(pendingLogFocus){
++    listTab = "wrong";
++    picked.clear();
++    previewQid = null;
++    folder = {by:"session", val: pendingLogFocus.label || ""};
++    logFilter.sec = 0;
++    logFilter.dom = "";
++    logFilter.onlyDue = false;
++    logFilter.hideMastered = false; // 刚做错的题不要被过滤掉
++    pendingLogFocus = null;
++  }
+   const head = el("div","pagehead");
+   head.innerHTML = `<div><h1>${listTab==="wrong"?"错题本":"我标记的题"}</h1>
+     <p>左边选题，右边看题目和官方解析。要一次处理多道，点「批量」。</p></div>`;
