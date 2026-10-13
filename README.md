@@ -4,8 +4,8 @@
 
 **纯静态，没有后端。打开就能用，不用注册。**
 
-> 在线：<https://yulan32feixiao.github.io/113114sat-mirror/>
-> 仓库：<https://github.com/yulan32feixiao/113114sat-mirror>
+> 在线：<https://yulan32feixiao.github.io/Sat-PP/>
+> 仓库：<https://github.com/yulan32feixiao/Sat-PP>
 
 ---
 
