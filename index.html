@@ -72,6 +72,10 @@
       </nav>
 
       
+        <button onclick="openBackupModal()" id="btn-backup" title="导出备份 / 导入恢复"
+                class="text-xs border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-lg font-semibold transition mr-2">
+          <i class="fa-solid fa-floppy-disk mr-1.5 text-slate-500"></i>数据
+        </button>
         <button onclick="openAiSettings()" class="text-xs border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-[#144e4b] px-2.5 py-1.5 rounded-lg font-semibold transition flex items-center">
           <i class="fa-solid fa-brain mr-1.5 text-emerald-600"></i>AI 助手
         </button>
@@ -614,6 +618,46 @@
     </div>
   </div>
 
+  <!-- 数据备份 / 恢复 -->
+  <div id="modal-backup" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[60] flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden">
+      <div class="bg-[#144e4b] text-white px-4 py-3 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <i class="fa-solid fa-floppy-disk text-emerald-300"></i>
+          <span class="font-bold text-sm">练习数据备份</span>
+        </div>
+        <button onclick="closeModal('modal-backup')" class="text-white hover:text-rose-300 text-lg">&times;</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 leading-relaxed">
+          <i class="fa-solid fa-triangle-exclamation mr-1"></i>
+          <b>记录只存在这台浏览器里。</b>清浏览器数据、换电脑、Safari 长期不打开（约 7 天）
+          都会让它们消失。<b>定期导出一份，是目前唯一的保险。</b>
+        </div>
+
+        <div id="backup-stats" class="grid grid-cols-3 gap-2 text-center"></div>
+
+        <div class="flex gap-2">
+          <button onclick="exportBackup()"
+            class="flex-1 px-4 py-2.5 bg-[#144e4b] hover:bg-[#0e3b38] text-white rounded-lg text-sm font-semibold transition">
+            <i class="fa-solid fa-download mr-1.5"></i>导出备份
+          </button>
+          <button onclick="document.getElementById('backup-file').click()"
+            class="flex-1 px-4 py-2.5 border border-slate-300 hover:bg-slate-50 rounded-lg text-sm font-semibold transition">
+            <i class="fa-solid fa-upload mr-1.5"></i>导入恢复
+          </button>
+          <input type="file" id="backup-file" accept=".json,application/json" class="hidden" onchange="importBackup(this)">
+        </div>
+
+        <p class="text-[11px] text-slate-500 leading-relaxed">
+          导出的是一个 JSON 文件，含作答记录、错题本、生词本。<b>不含 API key</b>。
+          导入时同一道题以<b>较新的记录</b>为准，不会覆盖掉你本机更晚做的题。
+        </p>
+        <div id="backup-msg" class="text-xs min-h-[1rem]"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- 公式表弹窗 -->
   <div id="modal-reference" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[60] flex items-center justify-center p-4">
     <div class="bg-white rounded-xl max-w-xl w-full p-6 shadow-2xl">
@@ -717,13 +761,11 @@
         att: get("sat_attempts", []),
         mst: get("sat_mistakes", {}),
         vcb: get("sat_vocab",    []),
-        mrk: get("sat_marks",    {}),
       };
     }
 
     const _saved = loadUserData();
     let attempts = _saved.att;
-    let marks = _saved.mrk;
     let mistakes = _saved.mst;
     let vocabList = _saved.vcb;
     let activeSession = null;
@@ -801,6 +843,7 @@
         setBankBadge("bg-emerald-50 text-emerald-800 border-emerald-200", "fa-circle-check",
                      full.length.toLocaleString() + " 题 (官方原题库)");
         initBank();
+        if (typeof refreshBackupNag === "function") refreshBackupNag();
       } catch (e) {
         fail("载入失败：" + (e && e.message || e),
              location.protocol === "file:"
@@ -1069,6 +1112,139 @@
           这里<b>不给分数预测</b>。SAT 换算要用官方 Raw Score Conversion Table，而且必须是全真结构（R&amp;W 54 题 + Math 44 题、两段自适应）；
           专项练习的正确率换不出有意义的分数。想要估分请做「全真模考」。
         </p>`;
+    }
+
+    /* ============ 数据备份 / 恢复 ============
+       记录只在 localStorage，清浏览器、换设备、Safari 的长期不访问驱逐都会清空。
+       没有后端，所以导出成文件是目前唯一可靠的保险。
+       API key 不进备份；导入按时间戳合并，不会覆盖本机更晚做的题。 */
+    const BACKUP_FORMAT = "sat-pp-backup";
+
+    function collectBackup() {
+      const get = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
+      return {
+        _format: BACKUP_FORMAT,
+        _version: 1,
+        exportedAt: new Date().toISOString(),
+        attempts: get("sat_attempts", []),
+        mistakes: get("sat_mistakes", {}),
+        vocab:    get("sat_vocab", []),
+      };
+    }
+
+    function renderBackupStats() {
+      const b = collectBackup();
+      const box = document.getElementById('backup-stats');
+      if (!box) return;
+      const bytes = new Blob([JSON.stringify(b)]).size;
+      const open = Object.values(b.mistakes).filter(m => !m.mastered).length;
+      const cell = (n, label) => `
+        <div class="bg-slate-50 border border-slate-200 rounded-lg py-2.5">
+          <div class="text-xl font-extrabold text-slate-900">${n}</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">${label}</div>
+        </div>`;
+      box.innerHTML = cell(b.attempts.length, "条作答")
+                    + cell(open, "待攻克错题")
+                    + cell(b.vocab.length, "个生词");
+      const msg = document.getElementById('backup-msg');
+      if (msg && !b.attempts.length) msg.innerHTML = '<span class="text-slate-400">还没有任何记录，现在导出会是一个空文件。</span>';
+      else if (msg) msg.innerHTML = `<span class="text-slate-400">备份文件约 ${(bytes/1024).toFixed(0)} KB</span>`;
+    }
+
+    function openBackupModal() {
+      renderBackupStats();
+      document.getElementById('modal-backup').classList.remove('hidden');
+    }
+
+    function exportBackup() {
+      const b = collectBackup();
+      const blob = new Blob([JSON.stringify(b, null, 1)], { type: "application/json" });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = "SAT练习备份-" + new Date().toISOString().slice(0, 10) + ".json";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      try { localStorage.setItem("sat_last_backup", String(Date.now())); } catch (e) {}
+      const msg = document.getElementById('backup-msg');
+      if (msg) msg.innerHTML = `<span class="text-emerald-700 font-semibold"><i class="fa-solid fa-circle-check mr-1"></i>已导出 ${b.attempts.length} 条作答</span>`;
+      refreshBackupNag();
+    }
+
+    function importBackup(input) {
+      const f = input.files && input.files[0];
+      const msg = document.getElementById('backup-msg');
+      input.value = "";
+      if (!f) return;
+      const say = (html) => { if (msg) msg.innerHTML = html; };
+      const rd = new FileReader();
+      rd.onload = () => {
+        let d;
+        try { d = JSON.parse(rd.result); }
+        catch (e) { return say('<span class="text-rose-600">这个文件不是合法 JSON</span>'); }
+        if (!d || d._format !== BACKUP_FORMAT)
+          return say('<span class="text-rose-600">这不是本工具导出的备份文件</span>');
+
+        // 作答：按 aid 去重，两边都有就留时间晚的
+        const byAid = new Map();
+        [...(Array.isArray(attempts) ? attempts : []), ...(d.attempts || [])].forEach(a => {
+          if (!a || !a.aid) return;
+          const old = byAid.get(a.aid);
+          if (!old || (a.ts || 0) > (old.ts || 0)) byAid.set(a.aid, a);
+        });
+        const mergedAtt = [...byAid.values()].sort((x, y) => (x.ts || 0) - (y.ts || 0));
+
+        // 错题：同一题留 ts 更新的那条
+        const mergedMst = Object.assign({}, mistakes || {});
+        Object.entries(d.mistakes || {}).forEach(([qid, m]) => {
+          const cur = mergedMst[qid];
+          if (!cur || (m.ts || 0) > (cur.ts || 0)) mergedMst[qid] = m;
+        });
+
+        // 生词：按 词+来源题 去重
+        const seen = new Set((vocabList || []).map(v => (v.word || "") + "|" + (v.qid || "")));
+        const mergedVocab = [...(vocabList || [])];
+        (d.vocab || []).forEach(v => {
+          const k = (v.word || "") + "|" + (v.qid || "");
+          if (!seen.has(k)) { seen.add(k); mergedVocab.push(v); }
+        });
+
+        const addedAtt = mergedAtt.length - (attempts || []).length;
+        const addedVoc = mergedVocab.length - (vocabList || []).length;
+
+        attempts = mergedAtt; mistakes = mergedMst; vocabList = mergedVocab;
+        try {
+          localStorage.setItem("sat_attempts", JSON.stringify(attempts.slice(-2000)));
+          localStorage.setItem("sat_mistakes", JSON.stringify(mistakes));
+          localStorage.setItem("sat_vocab", JSON.stringify(vocabList));
+        } catch (e) {
+          return say('<span class="text-rose-600">浏览器存储写满了，没能保存。先导出一份再清理。</span>');
+        }
+        say(`<span class="text-emerald-700 font-semibold"><i class="fa-solid fa-circle-check mr-1"></i>已合并：新增 ${addedAtt} 条作答、${addedVoc} 个生词</span>`);
+        renderBackupStats();
+        if (typeof initBank === "function") initBank();
+        if (typeof renderReport === "function" && view === "report") renderReport();
+      };
+      rd.readAsText(f);
+    }
+
+    /* 攒了不少记录却一直没导出过，就在「数据」按钮上点一个红点提醒 */
+    function refreshBackupNag() {
+      const btn = document.getElementById('btn-backup');
+      if (!btn) return;
+      const n = (attempts || []).length;
+      let last = 0;
+      try { last = +localStorage.getItem("sat_last_backup") || 0; } catch (e) {}
+      const stale = n >= 50 && (Date.now() - last) > 7 * 86400000;
+      btn.classList.toggle('border-rose-300', stale);
+      btn.classList.toggle('bg-rose-50', stale);
+      const dot = btn.querySelector('.nag-dot');
+      if (stale && !dot) {
+        const d = document.createElement('span');
+        d.className = "nag-dot absolute -top-1 -right-1 w-2 h-2 bg-rose-500 rounded-full";
+        btn.classList.add('relative');
+        btn.appendChild(d);
+      } else if (!stale && dot) dot.remove();
+      btn.title = stale ? "已经 7 天以上没导出备份了，记录只在这台浏览器里" : "导出备份 / 导入恢复";
     }
 
     // ================= 全真模考启动器 (MOCK RUNNER) =================
