@@ -1489,7 +1489,32 @@
         ? '<span class="text-emerald-700"><i class="fa-solid fa-circle-check mr-1"></i>回答正确</span>' 
         : '<span class="text-rose-700"><i class="fa-solid fa-circle-xmark mr-1"></i>回答有误</span>';
       document.getElementById('rationale-correct-ans').innerText = `官方答案: ${q.an.join(', ')}`;
-      document.getElementById('rationale-text').innerHTML = q.ra || '官方暂未提供详细 rationale 说明';
+
+      /* 答错时，先把「你选的那个错项为什么错」那一段单独拎出来放在最前面。
+         官方解析是一大段英文，把 A/B/C/D 四个选项的说明连在一起写；
+         整段塞给你，你得自己在里面找写自己那个选项的句子 —— 那句才是你要的。
+         全文折叠在下面，想看随时展开。 */
+      const raEl = document.getElementById('rationale-text');
+      const myChunk = (!isRight && ans && q.ty !== 'spr')
+        ? extractChoiceRationale(q.ra || '', ans) : '';
+      const full = q.ra || '官方暂未提供详细 rationale 说明';
+      // 抽出来的那段若和全文一样长，说明没切开，就别重复展示
+      const gotChunk = myChunk && myChunk.length < stripTags(q.ra || '').length * 0.9;
+
+      raEl.innerHTML = gotChunk
+        ? `<div class="mb-3 p-3 bg-rose-50 border border-rose-200 rounded-lg">
+             <div class="text-[11px] font-bold text-rose-800 mb-1">
+               <i class="fa-solid fa-circle-xmark mr-1"></i>你选了 ${ans} —— 官方说它为什么错
+             </div>
+             <div class="text-slate-700 leading-relaxed">${myChunk}</div>
+           </div>
+           <details class="group">
+             <summary class="cursor-pointer text-[11px] font-semibold text-emerald-800 hover:text-emerald-600 select-none">
+               <i class="fa-solid fa-chevron-right mr-1 group-open:rotate-90 transition-transform inline-block"></i>展开官方完整解析（含正确答案为什么对）
+             </summary>
+             <div class="mt-2 leading-relaxed">${full}</div>
+           </details>`
+        : full;
     }
 
     // 划词高亮与添加生词功能 (Highlight & Vocabulary)
