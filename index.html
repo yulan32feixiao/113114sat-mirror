@@ -388,7 +388,7 @@
       </div>
 
       <!-- 双栏做题主区 -->
-      <div class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-6 overflow-hidden">
+      <div id="runner-body" class="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-6 overflow-hidden">
         
         <!-- 左栏：材料文章 (支持划词高亮 + 添加生词) -->
         <div class="bg-white rounded-xl border border-slate-300 p-6 flex flex-col shadow-xs overflow-y-auto relative" id="left-pane-wrap">
@@ -1383,9 +1383,19 @@
         fIcon.className = "fa-regular fa-bookmark";
       }
 
-      // 左栏材料
+      // 左栏材料。没有原文（数学题多数如此）就整个收起来，右栏单栏居中 ——
+      // 官方 Bluebook 就是这样：独立题是一栏居中，不是左边空着占半屏。
       const pEl = document.getElementById('runner-passage');
-      pEl.innerHTML = q.sti ? q.sti : '<p class="text-slate-400 italic">本题为独立题，无需结合附加文章，直接阅读右侧题干解答。</p>';
+      const body = document.getElementById('runner-body');
+      const leftWrap = document.getElementById('left-pane-wrap');
+      const hasPassage = !!(q.sti && String(q.sti).trim());
+      if (leftWrap) leftWrap.classList.toggle('hidden', !hasPassage);
+      if (body) {
+        body.classList.toggle('md:grid-cols-2', hasPassage);
+        body.classList.toggle('max-w-7xl', hasPassage);
+        body.classList.toggle('max-w-3xl', !hasPassage);
+      }
+      pEl.innerHTML = hasPassage ? q.sti : '';
 
       // 右栏题干
       document.getElementById('runner-prompt').innerHTML = q.ste;
