@@ -44,6 +44,17 @@
   mark.user-hl:hover { background: #fca5a5; }
   mark.user-kp { background: #dbeafe; border-bottom: 2px solid #3b82f6; padding: 0 1px; border-radius: 2px; cursor: pointer; }
   mark.user-kp:hover { background: #fecaca; border-bottom-color: #ef4444; }
+  /* 打印：只留复盘正文，去掉导航和按钮；每题不跨页断开 */
+  @media print {
+    body { background: #fff; }
+    header, #view-dashboard, #view-mock, #view-mistakes, #view-vocab, #view-report,
+    #view-runner, #view-review-screen, .no-print { display: none !important; }
+    #view-debrief { position: static !important; overflow: visible !important; }
+    #view-debrief > div:first-child { display: none !important; }
+    #debrief-body details { border: 1px solid #ccc !important; page-break-inside: avoid; }
+    #debrief-body button { display: none !important; }
+    #debrief-body summary { list-style: none; }
+  }
 </style>
 </head>
 <body class="bg-[#f6f7f3] text-slate-800 antialiased min-h-screen flex flex-col font-sans">
@@ -563,6 +574,30 @@
         </div>
       </div>
     </section>
+
+    <!-- ================= 视图 8: 交卷后复盘 =================
+         以前交卷只弹一个 alert 报正确率就跳回首页，复盘这一环整个是空的。
+         做题时不给任何解析，就是为了把它们集中到这里。 -->
+    <section id="view-debrief" class="view-panel hidden fixed inset-0 z-50 flex flex-col bg-slate-50 overflow-y-auto">
+      <div class="bg-[#144e4b] text-white px-6 h-14 flex items-center justify-between shadow-md shrink-0">
+        <div class="flex items-center space-x-2">
+          <i class="fa-solid fa-clipboard-check text-emerald-300"></i>
+          <span class="font-bold text-sm">本次复盘</span>
+          <span id="debrief-label" class="text-[11px] text-emerald-200/80"></span>
+        </div>
+        <div class="flex items-center space-x-2 text-xs">
+          <button onclick="printDebrief()" class="px-2.5 py-1 bg-[#0e3b38] hover:bg-[#0a2d2b] rounded transition">
+            <i class="fa-solid fa-print mr-1"></i>打印 / 存 PDF
+          </button>
+          <button onclick="exportDebriefDoc()" class="px-2.5 py-1 bg-[#0e3b38] hover:bg-[#0a2d2b] rounded transition">
+            <i class="fa-solid fa-file-word mr-1"></i>Word
+          </button>
+          <button onclick="closeDebrief()" class="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 rounded font-semibold transition">完成</button>
+        </div>
+      </div>
+      <div id="debrief-body" class="flex-1 max-w-5xl w-full mx-auto p-5 md:p-8"></div>
+    </section>
+
 
   </main>
 
@@ -1814,6 +1849,219 @@
       if (btn) btn.innerHTML = '<i class="fa-solid fa-pause mr-1"></i>暂停';
     }
 
+    /* ============ 交卷后复盘 ============
+       做题时一点解析都不给，全部集中到这里。原则：
+       - 做错的自动展开（这才是要看的）
+       - 做对的折叠起来（别淹没重点）
+       - 先给「你选了什么、官方说它为什么错」，完整解析折叠在后面
+       - AI 拆解 / 出同构题按钮放在每道错题下面，而不是做题时 */
+    let debriefData = null;
+
+    function openDebrief(session, okCount) {
+      const sid = session.sid;
+      const hlQids = Store.highlightedQidsIn(sid);
+      debriefData = {
+        label: session.title || "专项练习",
+        sid,
+        ts: Date.now(),
+        ok: okCount,
+        items: session.questions.map((q, i) => {
+          const a = session.answers[i] || {};
+          const right = a.picked != null && a.picked !== "" && q.an && q.an.length
+            ? (q.ty === "spr" ? sprMatch(a.picked, q.an) : q.an.includes(a.picked))
+            : false;
+          return {
+            q, i,
+            picked: a.picked, ok: right, ms: a.ms || 0,
+            tag: (mistakes[q.id] && mistakes[q.id].tag) || "",
+            detail: (mistakes[q.id] && mistakes[q.id].detail) || "",
+            highlighted: hlQids.includes(q.id),
+            keypoints: Store.keypointsFor(q.id).length,
+          };
+        }),
+      };
+      renderDebrief();
+      switchView("debrief");
+      document.getElementById("view-debrief").classList.remove("hidden");
+    }
+
+    function closeDebrief() {
+      document.getElementById("view-debrief").classList.add("hidden");
+      debriefData = null;
+      switchView("dashboard");
+    }
+
+    const fmtSec = (ms) => {
+      const s = Math.round((ms || 0) / 1000);
+      return s < 60 ? s + " 秒" : Math.floor(s / 60) + " 分 " + String(s % 60).padStart(2, "0") + " 秒";
+    };
+
+    function renderDebrief() {
+      const box = document.getElementById("debrief-body");
+      if (!box || !debriefData) return;
+      const d = debriefData;
+      const n = d.items.length;
+      const pct = n ? Math.round(d.ok / n * 100) : 0;
+      const totalMs = d.items.reduce((t, x) => t + x.ms, 0);
+      document.getElementById("debrief-label").textContent =
+        d.label + " · " + new Date(d.ts).toLocaleString();
+
+      // 用时 × 对错 四象限
+      const SLOW = x => x.ms > (x.q.sec === 2 ? 95000 : 71000);
+      const FAST = x => x.ms > 0 && x.ms < 25000;
+      const q4 = {
+        慢而对: d.items.filter(x => x.ok && SLOW(x)),
+        快而错: d.items.filter(x => !x.ok && FAST(x)),
+        慢而错: d.items.filter(x => !x.ok && SLOW(x)),
+        快而对: d.items.filter(x => x.ok && FAST(x)),
+      };
+      const HINT = {
+        慢而对: "会做但没形成自动化 —— 同类题限时再练",
+        快而错: "冲动作答 —— 回原文/题干找依据再选",
+        慢而错: "概念断层 —— 先补概念本身，别刷题",
+        快而对: "已掌握",
+      };
+      const TONE = { 慢而对: "amber", 快而错: "rose", 慢而错: "red", 快而对: "emerald" };
+
+      const stat = (v, l) => `<div class="bg-white border border-slate-200 rounded-xl p-4 text-center">
+          <div class="text-2xl font-extrabold text-slate-900">${v}</div>
+          <div class="text-[11px] text-slate-500 mt-0.5">${l}</div></div>`;
+
+      const quad = Object.entries(q4).filter(([, list]) => list.length).map(([k, list]) =>
+        `<div class="border border-slate-200 rounded-lg p-3 bg-white">
+           <div class="flex items-baseline justify-between">
+             <span class="text-xs font-bold text-${TONE[k]}-700">${k}</span>
+             <span class="text-lg font-extrabold text-slate-900">${list.length}</span>
+           </div>
+           <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">${HINT[k]}</p>
+           <p class="text-[10px] text-slate-400 mt-1">第 ${list.map(x => x.i + 1).join("、")} 题</p>
+         </div>`).join("");
+
+      const rows = d.items.map(x => renderDebriefItem(x)).join("");
+
+      box.innerHTML = `
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          ${stat(d.ok + " / " + n, "答对")}
+          ${stat(pct + "%", "正确率")}
+          ${stat(fmtSec(totalMs), "总用时")}
+          ${stat(n ? fmtSec(totalMs / n) : "—", "平均每题")}
+        </div>
+
+        ${quad ? `<div class="mt-5">
+          <h3 class="text-sm font-bold text-slate-900 mb-1">用时 × 对错</h3>
+          <p class="text-[11px] text-slate-400 mb-2">四种情况要用四种练法，别混成一个「正确率」</p>
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-2.5">${quad}</div>
+        </div>` : ""}
+
+        <div class="mt-6">
+          <div class="flex items-center justify-between mb-2">
+            <h3 class="text-sm font-bold text-slate-900">逐题复盘</h3>
+            <span class="text-[11px] text-slate-400">做错的已展开，做对的点标题可展开</span>
+          </div>
+          <div class="space-y-3">${rows}</div>
+        </div>
+
+        <div class="mt-7 flex flex-wrap gap-2 justify-center pb-10">
+          <button onclick="closeDebrief()" class="px-5 py-2.5 bg-[#144e4b] hover:bg-[#0e3b38] text-white rounded-lg text-sm font-semibold">完成复盘</button>
+          <button onclick="switchView('mistakes'); closeDebrief();" class="px-5 py-2.5 border border-slate-300 hover:bg-white rounded-lg text-sm font-semibold">去错题本</button>
+          <button onclick="closeDebrief(); launchTargetedDrill();" class="px-5 py-2.5 border border-slate-300 hover:bg-white rounded-lg text-sm font-semibold">再来一组</button>
+        </div>`;
+    }
+
+    function renderDebriefItem(x) {
+      const q = x.q, no = x.i + 1;
+      const badge = x.ok
+        ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-bold">对</span>'
+        : '<span class="text-[10px] px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-bold">错</span>';
+      const marks = (x.highlighted ? '<span class="text-[10px] text-amber-600 ml-1" title="这题画过高亮"><i class="fa-solid fa-highlighter"></i></span>' : "")
+                  + (x.keypoints ? `<span class="text-[10px] text-sky-600 ml-1" title="这题有 ${x.keypoints} 条重点"><i class="fa-solid fa-star"></i></span>` : "");
+      const chunk = (!x.ok && x.picked && q.ty !== "spr") ? extractChoiceRationale(q.ra || "", x.picked) : "";
+      const gotChunk = chunk && chunk.length < stripTags(q.ra || "").length * 0.9;
+
+      return `<details class="bg-white border ${x.ok ? "border-slate-200" : "border-rose-200"} rounded-xl overflow-hidden" ${x.ok ? "" : "open"}>
+        <summary class="px-4 py-3 cursor-pointer select-none flex items-center justify-between hover:bg-slate-50">
+          <span class="flex items-center gap-2 text-xs">
+            <b class="text-slate-700">第 ${no} 题</b>${badge}
+            <span class="text-slate-400">${esc(q.sk || "")}</span>${marks}
+            ${x.tag ? `<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">${esc(x.tag)}</span>` : ""}
+          </span>
+          <span class="text-[11px] text-slate-400 font-mono shrink-0">${fmtSec(x.ms)}</span>
+        </summary>
+        <div class="px-4 pb-4 text-xs space-y-3 border-t border-slate-100 pt-3">
+          <div class="flex gap-4 font-mono text-[11px]">
+            <span>你的答案：<b class="${x.ok ? "text-emerald-700" : "text-rose-700"}">${esc(x.picked || "未作答")}</b></span>
+            <span>正确答案：<b class="text-emerald-700">${esc((q.an || []).join(" / "))}</b></span>
+          </div>
+          ${q.sti ? `<div class="text-slate-700 leading-relaxed border-l-2 border-slate-200 pl-3">${q.sti}</div>` : ""}
+          <div class="text-slate-800 font-semibold">${q.ste || ""}</div>
+          ${gotChunk ? `<div class="p-3 bg-rose-50 border border-rose-200 rounded-lg">
+              <div class="text-[11px] font-bold text-rose-800 mb-1">官方说你选的 ${esc(x.picked)} 为什么错</div>
+              <div class="text-slate-700 leading-relaxed">${chunk}</div>
+            </div>` : ""}
+          <details class="group">
+            <summary class="cursor-pointer text-[11px] font-semibold text-emerald-800 hover:text-emerald-600 select-none">
+              <i class="fa-solid fa-chevron-right mr-1 group-open:rotate-90 transition-transform inline-block"></i>官方完整解析
+            </summary>
+            <div class="mt-2 leading-relaxed text-slate-600">${q.ra || "官方未提供解析"}</div>
+          </details>
+          <div class="flex flex-wrap gap-2 pt-1">
+            <button onclick="runAiQuestionBreakdown('${q.id}')" class="px-2.5 py-1.5 bg-emerald-50 border border-[#144e4b] text-[#144e4b] rounded text-[11px] font-semibold hover:bg-emerald-100">
+              <i class="fa-solid fa-robot mr-1"></i>AI 深度拆解
+            </button>
+            <button onclick="runAiGenerateSimilar('${q.id}')" class="px-2.5 py-1.5 bg-[#144e4b] text-white rounded text-[11px] font-semibold hover:bg-[#0e3b38]">
+              <i class="fa-solid fa-plus mr-1"></i>AI 出同构变式题
+            </button>
+          </div>
+        </div>
+      </details>`;
+    }
+
+    /* 打印成 PDF：用浏览器自带的打印管线，不引第三方库。
+       题库里 313 道题的图全是 <svg> 矢量，走打印管线是矢量输出、放大不糊；
+       用 html2canvas 截图反而会光栅化变糊，正好毁掉图表题。 */
+    function printDebrief() {
+      document.querySelectorAll('#debrief-body details').forEach(d => d.open = true);
+      setTimeout(() => window.print(), 120);
+    }
+
+    /* Word：HTML 直接当 .doc，零依赖，Word 能打开，SVG 也带得过去 */
+    function exportDebriefDoc() {
+      if (!debriefData) return;
+      const d = debriefData;
+      const n = d.items.length;
+      const rows = d.items.map(x => {
+        const q = x.q;
+        const chunk = (!x.ok && x.picked && q.ty !== "spr") ? extractChoiceRationale(q.ra || "", x.picked) : "";
+        return `<div style="border:1px solid #ccc;padding:10px;margin:10px 0;page-break-inside:avoid">
+          <p><b>${x.i + 1}. ${x.ok ? "✔ 对" : "✘ 错"}</b>
+             <span style="color:#666">${esc(q.sk || "")} · 用时 ${fmtSec(x.ms)}</span>
+             ${x.tag ? ` · <b style="color:#b45309">${esc(x.tag)}</b>` : ""}
+             ${x.highlighted ? " · 🖍 这题画过高亮" : ""}
+             ${x.keypoints ? ` · ⭐ ${x.keypoints} 条重点` : ""}</p>
+          ${q.sti ? `<div style="color:#333">${q.sti}</div>` : ""}
+          <div><b>${q.ste || ""}</b></div>
+          <p>你的答案：<b>${esc(x.picked || "未作答")}</b>　正确答案：<b>${esc((q.an || []).join(" / "))}</b></p>
+          ${chunk ? `<p style="background:#fff1f2;padding:8px"><b>官方说你选的 ${esc(x.picked)} 为什么错：</b>${chunk}</p>` : ""}
+          <div style="color:#444"><b>官方解析：</b>${q.ra || "无"}</div>
+        </div>`;
+      }).join("");
+
+      const totalMs = d.items.reduce((t, x) => t + x.ms, 0);
+      const html = `<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word"
+        xmlns="http://www.w3.org/TR/REC-html40"><head><meta charset="utf-8"><title>${esc(d.label)}</title></head><body>
+        <h1>${esc(d.label)}</h1>
+        <p>${new Date(d.ts).toLocaleString()}　答对 ${d.ok}/${n}（${n ? Math.round(d.ok / n * 100) : 0}%）　总用时 ${fmtSec(totalMs)}</p>
+        <p><i>给 AI 的提示：请按「错因标签」聚类，指出我反复卡住的是哪几个概念，并按优先级排序。</i></p>
+        ${rows}</body></html>`;
+
+      const blob = new Blob(["﻿" + html], { type: "application/msword" });
+      const a2 = document.createElement("a");
+      a2.href = URL.createObjectURL(blob);
+      a2.download = "SAT复盘_" + new Date(d.ts).toISOString().slice(0, 10) + ".doc";
+      document.body.appendChild(a2); a2.click(); a2.remove();
+      setTimeout(() => URL.revokeObjectURL(a2.href), 1000);
+    }
+
     /* ============ 账号 UI ============ */
     function openAccountModal() {
       renderAccount();
@@ -2690,9 +2938,10 @@
       Store.clearSession();
 
       initBank();
-      const rate = Math.round((okCount / activeSession.questions.length) * 100);
-      alert(`练习已提交！本次完成 ${activeSession.questions.length} 题，正确率 ${rate}% (${okCount}/${activeSession.questions.length})`);
-      switchView("dashboard");
+      // 以前这里弹个 alert 就跳回首页，复盘整个是空的。现在进复盘页。
+      const finished = activeSession;
+      openDebrief(finished, okCount);
+      activeSession = null;
     }
 
     function quitRunnerConfirm() {
