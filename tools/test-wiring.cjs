@@ -100,5 +100,16 @@ else {
   else pass("所有存储读写都走 Store");
 }
 
+/* ---------- 7. Tailwind 透明度档位 ---------- */
+console.log("\n=== 7. 有没有用了不存在的透明度档位 ===");
+const OPACITY_STEPS = new Set([0,5,10,15,20,25,30,35,40,45,50,55,60,65,70,75,80,85,90,95,100]);
+const badOp = [];
+for (const m of src.matchAll(/class="[^"]*\b(?:bg|text|border)-[\w-]+\/(\d+)\b/g)) {
+  const n = +m[1];
+  if (!OPACITY_STEPS.has(n)) badOp.push(n);
+}
+if (badOp.length) fail(`用了 /${[...new Set(badOp)].join(" /")} 透明度，Tailwind 只有 5 的倍数档位，这些会变成完全透明（遮罩会失效）`);
+else pass("透明度档位都是合法的");
+
 console.log(`\n结果: ${ok} 通过 / ${bad} 失败`);
 process.exit(bad ? 1 : 0);
