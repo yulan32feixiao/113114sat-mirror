@@ -2783,16 +2783,21 @@
       document.getElementById('selection-popover').classList.add('hidden');
       if (!currentSelectedText) return;
       const q = activeSession.questions[activeSession.currentIndex];
-      const item = {
-        word: currentSelectedText,
-        qid: q.id,
-        skill: q.sk,
-        ts: Date.now()
-      };
-      vocabList.push(item);
+      const word = currentSelectedText;
+      if (vocabList.some(v => v.word === word && v.qid === q.id)) {
+        toastMini(`「${word}」已经在生词本里了`);
+        return;
+      }
+      // 除了 qid，还把当时那句原文单独存一份 ——
+      // 题库以后换版本、qid 对不上时，至少语境还在。孤立的词没有意义。
+      vocabList.push({
+        word, qid: q.id, skill: q.sk, dom: q.dom,
+        context: sentenceAround(q.sti || q.ste || "", word),
+        ts: Date.now(),
+      });
       Store.saveVocab(vocabList);
       document.getElementById('vocab-count-badge').innerText = vocabList.length;
-      alert(`已成功将词汇 "${currentSelectedText}" 收录至生词本！`);
+      toastMini(`「${word}」已收进生词本，点开能看原句`);
     }
 
     // 抽屉导航
@@ -3052,6 +3057,65 @@
     }
 
     // ================= 生词本渲染 =================
+    /* ============ 生词本 ============
+       以前每行只有一个光秃秃的单词 —— 收词时存了 qid，但从来没人拿它回查原题。
+       孤立地背一个词没用，SAT 的 Words in Context 考的就是「作者在这个语境里用它的意思」，
+       所以点开要能看到原句，而且把那个词在原文里标出来。
+       默认折叠，免得列表被整段原文淹没；顶部有开关可以一次全展开。 */
+    let vocabShowContext = false;
+
+    function toggleVocabContext() {
+      vocabShowContext = !vocabShowContext;
+      renderVocabView();
+    }
+
+    /* 在原文里把这个词高亮出来，只动文本节点，不碰标签 */
+    function markWordInHtml(html, word) {
+      if (!html || !word) return html || "";
+      const box = document.createElement("div");
+      box.innerHTML = html;
+      const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT, null);
+      const hits = [];
+      let n;
+      while ((n = walker.nextNode())) {
+        const idx = n.nodeValue.toLowerCase().indexOf(word.toLowerCase());
+        if (idx >= 0) hits.push({ node: n, idx });
+      }
+      hits.forEach(({ node, idx }) => {
+        const after = node.splitText(idx);
+        after.splitText(word.length);
+        const mk = document.createElement("mark");
+        mk.className = "user-hl";
+        mk.textContent = after.nodeValue;
+        after.parentNode.replaceChild(mk, after);
+      });
+      return box.innerHTML;
+    }
+
+    /* 从整段原文里把包含这个词的那一句抠出来 */
+    function sentenceAround(html, word) {
+      const text = String(html || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      if (!text || !word) return "";
+      const i = text.toLowerCase().indexOf(word.toLowerCase());
+      if (i < 0) return text.slice(0, 220);
+      let a = text.lastIndexOf(".", i), b = text.indexOf(".", i + word.length);
+      a = a < 0 ? 0 : a + 1;
+      b = b < 0 ? text.length : b + 1;
+      return text.slice(a, b).trim();
+    }
+
+    /* 轻提示，别再用 alert 打断做题 */
+    function toastMini(msg) {
+      const old = document.getElementById("mini-toast");
+      if (old) old.remove();
+      const t = document.createElement("div");
+      t.id = "mini-toast";
+      t.className = "fixed bottom-6 left-1/2 -translate-x-1/2 z-[70] bg-slate-900 text-white text-xs px-4 py-2.5 rounded-lg shadow-xl";
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 2200);
+    }
+
     function renderVocabView() {
       const container = document.getElementById('vocab-list-container');
       container.innerHTML = '';
@@ -3060,23 +3124,78 @@
           <div class="bg-white p-12 rounded-xl border border-slate-200 text-center text-slate-400 space-y-2">
             <i class="fa-solid fa-book-open text-3xl text-amber-500"></i>
             <div class="font-bold text-slate-700">生词本目前为空</div>
-            <div class="text-xs">做题过程中划选短文中的生僻词汇，点击【添生词】即可自动归集到此处。</div>
-          </div>
-        `;
+            <div class="text-xs">做题时划选原文里不认识的词，点浮窗上的【生词】就会收到这里，并记住它出自哪道题。</div>
+          </div>`;
         return;
       }
-      vocabList.forEach((v, idx) => {
-        const row = document.createElement('div');
-        row.className = "bg-white p-4 rounded-xl border border-slate-200 flex justify-between items-center text-xs";
-        row.innerHTML = `
-          <div>
-            <div class="font-bold text-sm text-slate-900">${v.word}</div>
-            <div class="text-slate-400 mt-0.5">来自考点: ${v.skill || 'General'} · 记录于 ${new Date(v.ts).toLocaleDateString()}</div>
-          </div>
-          <button onclick="deleteVocabItem(${idx})" class="text-slate-400 hover:text-rose-600 px-2 py-1 border rounded">移除</button>
-        `;
-        container.appendChild(row);
-      });
+
+      const bar = document.createElement('div');
+      bar.className = "flex items-center justify-between mb-3 text-xs";
+      bar.innerHTML = `
+        <span class="text-slate-500">共 <b class="text-slate-800">${vocabList.length}</b> 个词</span>
+        <button onclick="toggleVocabContext()"
+          class="px-3 py-1.5 border rounded-lg font-semibold transition ${
+            vocabShowContext ? "bg-[#144e4b] text-white border-[#144e4b]" : "border-slate-300 text-slate-600 hover:bg-white"}">
+          <i class="fa-solid fa-align-left mr-1"></i>${vocabShowContext ? "收起全部原文" : "展开全部原文"}
+        </button>`;
+      container.appendChild(bar);
+
+      // 新收的排前面
+      vocabList.map((v, idx) => ({ v, idx }))
+        .sort((a, b) => (b.v.ts || 0) - (a.v.ts || 0))
+        .forEach(({ v, idx }) => {
+          const q = BYID[v.qid];
+          const card = document.createElement('details');
+          card.className = "bg-white rounded-xl border border-slate-200 overflow-hidden mb-2";
+          if (vocabShowContext && q) card.open = true;
+
+          const ctx = q
+            ? `<div class="px-4 pb-4 pt-3 border-t border-slate-100 text-xs space-y-2">
+                 <div class="text-[11px] text-slate-400">
+                   出自：${esc(q.domName || q.dom || "")} · ${esc(q.sk || "")}
+                 </div>
+                 ${q.sti ? `<div class="text-slate-700 leading-relaxed font-serif border-l-2 border-amber-300 pl-3">
+                   ${markWordInHtml(q.sti, v.word)}</div>` : ""}
+                 <div class="text-slate-800">${markWordInHtml(q.ste || "", v.word)}</div>
+                 <div class="pt-1">
+                   <button onclick="event.preventDefault(); practiceThisSkill('${esc(q.dom)}','${esc(q.sk)}')"
+                     class="px-2.5 py-1 border border-slate-300 rounded text-[11px] font-semibold hover:bg-slate-50">
+                     <i class="fa-solid fa-dumbbell mr-1"></i>练这个考点
+                   </button>
+                 </div>
+               </div>`
+            : `<div class="px-4 pb-4 pt-3 border-t border-slate-100 text-xs">
+                 ${v.context
+                   ? `<div class="text-slate-700 leading-relaxed font-serif border-l-2 border-amber-300 pl-3">
+                        ${markWordInHtml(esc(v.context), v.word)}</div>
+                      <div class="text-[11px] text-slate-400 mt-2">原题已不在当前题库里，这是收词时存下的语境句。</div>`
+                   : '<span class="text-slate-400">找不到原题，收词时也没留下语境句。</span>'}
+               </div>`;
+
+          card.innerHTML = `
+            <summary class="px-4 py-3 cursor-pointer select-none flex justify-between items-center hover:bg-slate-50">
+              <div>
+                <div class="font-bold text-sm text-slate-900">${esc(v.word)}</div>
+                <div class="text-[11px] text-slate-400 mt-0.5">
+                  ${esc(v.skill || "General")} · ${new Date(v.ts).toLocaleDateString()}
+                  ${q ? '<span class="text-emerald-600 ml-1">· 点开看原句</span>' : ""}
+                </div>
+              </div>
+              <span onclick="event.preventDefault(); event.stopPropagation(); deleteVocabItem(${idx});"
+                class="text-slate-400 hover:text-rose-600 px-2 py-1 border rounded text-[11px]">移除</span>
+            </summary>
+            ${ctx}`;
+          container.appendChild(card);
+        });
+    }
+
+    /* 从生词直接跳去练这个考点 —— 不认识的词往往不是孤立的，是这一类题没读懂 */
+    function practiceThisSkill(dom, sk) {
+      const cat = { INI: "reading", CAS: "reading", EOI: "grammar", SEC: "grammar" }[dom] || "math";
+      selectedCat = (sk === "Words in Context") ? "vocab" : cat;
+      selectedSkill = sk || "";
+      switchView("dashboard");
+      setTimeout(() => { if (typeof launchTargetedDrill === "function") launchTargetedDrill(); }, 150);
     }
 
     function deleteVocabItem(idx) {
