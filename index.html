@@ -100,9 +100,10 @@
         <div class="text-right hidden sm:block">
           <div class="text-slate-400">已作答: <span class="font-bold text-slate-800" id="header-done-count">0</span> 题</div>
         </div>
-        <div class="w-8 h-8 rounded-full bg-[#144e4b] text-white flex items-center justify-center font-bold text-xs shadow-xs">
-          FX
-        </div>
+        <button onclick="openAccountModal()" id="avatar" title="未登录 —— 点一下可登录同步"
+                class="w-8 h-8 rounded-full bg-slate-300 text-slate-600 flex items-center justify-center font-bold text-xs shadow-xs hover:ring-2 hover:ring-emerald-400 transition">
+          <i class="fa-regular fa-user"></i>
+        </button>
       </div>
     </div>
   </header>
@@ -1829,6 +1830,21 @@
       if (label) label.textContent = on ? (Auth.user && Auth.user.email ? "已登录" : "已登录") : "登录";
       const who = document.getElementById('acct-who');
       if (who && Auth.user) who.textContent = Auth.user.email || Auth.user.id;
+
+      // 头像：登录后显示邮箱首字母，没登录就是一个灰色小人 —— 别写死某个人的缩写
+      const av = document.getElementById('avatar');
+      if (av) {
+        const email = (Auth.user && Auth.user.email) || "";
+        if (on && email) {
+          av.textContent = email.trim()[0].toUpperCase();
+          av.className = "w-8 h-8 rounded-full bg-[#144e4b] text-white flex items-center justify-center font-bold text-xs shadow-xs hover:ring-2 hover:ring-emerald-400 transition";
+          av.title = email + " —— 点一下管理账号";
+        } else {
+          av.innerHTML = '<i class="fa-regular fa-user"></i>';
+          av.className = "w-8 h-8 rounded-full bg-slate-300 text-slate-600 flex items-center justify-center font-bold text-xs shadow-xs hover:ring-2 hover:ring-emerald-400 transition";
+          av.title = "未登录 —— 点一下可登录同步";
+        }
+      }
       const st = document.getElementById('acct-stats');
       if (st) {
         const cell = (n, t) => `<div class="bg-slate-50 border border-slate-200 rounded-lg py-2">
