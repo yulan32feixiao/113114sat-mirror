@@ -83,6 +83,10 @@
       </nav>
 
       
+        <button onclick="openAccountModal()" id="btn-account" title="登录后记录可跨设备"
+                class="text-xs border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-lg font-semibold transition mr-2">
+          <i class="fa-regular fa-user mr-1.5 text-slate-500"></i><span id="account-label">登录</span>
+        </button>
         <button onclick="openBackupModal()" id="btn-backup" title="导出备份 / 导入恢复"
                 class="text-xs border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 px-3 py-1.5 rounded-lg font-semibold transition mr-2">
           <i class="fa-solid fa-floppy-disk mr-1.5 text-slate-500"></i>数据
@@ -648,6 +652,70 @@
     </div>
   </div>
 
+  <!-- 账号 -->
+  <div id="modal-account" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[60] flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl max-w-md w-full shadow-2xl overflow-hidden">
+      <div class="bg-[#144e4b] text-white px-4 py-3 flex items-center justify-between">
+        <div class="flex items-center space-x-2">
+          <i class="fa-regular fa-user text-emerald-300"></i>
+          <span class="font-bold text-sm">账号与跨设备同步</span>
+        </div>
+        <button onclick="closeModal('modal-account')" class="text-white hover:text-rose-300 text-lg">&times;</button>
+      </div>
+
+      <!-- 未登录 -->
+      <div id="acct-out" class="p-5 space-y-4">
+        <p class="text-xs text-slate-600 leading-relaxed">
+          不登录也能正常练 —— 记录存在这台浏览器里。<br>
+          <b>登录之后</b>记录会同步到云端，换电脑、换浏览器都能接着练。
+        </p>
+        <div>
+          <label class="text-[11px] font-bold text-slate-500 uppercase">邮箱</label>
+          <input id="acct-email" type="email" autocomplete="email" placeholder="you@example.com"
+                 onkeydown="if(event.key==='Enter'){event.preventDefault();sendLoginLink();}"
+                 class="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2.5 text-sm outline-none focus:border-emerald-500">
+        </div>
+        <button onclick="sendLoginLink()" id="acct-send"
+          class="w-full px-4 py-2.5 bg-[#144e4b] hover:bg-[#0e3b38] text-white rounded-lg text-sm font-semibold transition">
+          <i class="fa-solid fa-paper-plane mr-1.5"></i>发送登录链接
+        </button>
+        <p class="text-[11px] text-slate-500 leading-relaxed">
+          <b>不设密码。</b>我们给你的邮箱发一条链接，点开就登录了 —— 没有密码可忘、也没有密码会泄露。
+        </p>
+        <div class="bg-slate-50 border border-slate-200 rounded-lg p-3 text-[11px] text-slate-600 leading-relaxed">
+          <b>这里只存你的邮箱</b>，用来认人和发登录链接。<br>
+          不要真实姓名、不要学校、不要生日。做题记录只有你自己看得到（数据库按行隔离）。<br>
+          随时可以一键删除账号和全部数据。
+        </div>
+        <div id="acct-msg" class="text-xs min-h-[1rem]"></div>
+      </div>
+
+      <!-- 已登录 -->
+      <div id="acct-in" class="hidden p-5 space-y-4">
+        <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+          <div class="text-[11px] text-emerald-700 font-bold">已登录</div>
+          <div id="acct-who" class="text-sm font-mono text-slate-800 mt-0.5 break-all"></div>
+        </div>
+        <div id="acct-stats" class="grid grid-cols-3 gap-2 text-center"></div>
+        <div class="flex gap-2">
+          <button onclick="syncNow()" id="acct-sync"
+            class="flex-1 px-4 py-2.5 bg-[#144e4b] hover:bg-[#0e3b38] text-white rounded-lg text-sm font-semibold transition">
+            <i class="fa-solid fa-rotate mr-1.5"></i>立即同步
+          </button>
+          <button onclick="signOutNow()"
+            class="px-4 py-2.5 border border-slate-300 hover:bg-slate-50 rounded-lg text-sm font-semibold transition">退出登录</button>
+        </div>
+        <div id="acct-msg2" class="text-xs min-h-[1rem]"></div>
+        <hr class="border-slate-200">
+        <button onclick="deleteAccountNow()"
+          class="w-full px-4 py-2 border border-rose-300 text-rose-700 hover:bg-rose-50 rounded-lg text-xs font-semibold transition">
+          <i class="fa-solid fa-trash mr-1.5"></i>删除账号和全部云端数据
+        </button>
+        <p class="text-[11px] text-slate-400">删除后云端记录立刻清空且无法恢复；这台浏览器上的本地记录会保留。</p>
+      </div>
+    </div>
+  </div>
+
   <!-- 数据备份 / 恢复 -->
   <div id="modal-backup" class="hidden fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-[60] flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden">
@@ -784,6 +852,253 @@
     // 不内置样题兜底 —— 静默降级到几十道题，会让人以为在刷全库。
     let BANK = [];
     let BYID = {};
+    /* ============ 云端：账号与同步 ============
+       没有用 supabase-js（又一个 CDN、又一个离线失效点）。
+       实际要的东西就三样：发登录邮件、从回跳地址里取会话、带着 token 读写表。
+       自己写 150 行，零依赖，离线时整段不生效、本地照常用。
+
+       publishable key 是公开的（它就写在这份源码里，推到公开仓库）。
+       安全不靠藏它，靠数据库的 RLS —— 实测过：拿这个 key 未登录去伪造写入，
+       数据库返回「new row violates row-level security policy」。 */
+    const CLOUD = {
+      url: "https://wueymtxtwokfsascoxuh.supabase.co",
+      key: "sb_publishable_MvnJALbRZOtfrlgQbv4Lxg_jAXwf1Hd",
+    };
+
+    const Auth = (() => {
+      let session = null;     // {access_token, refresh_token, expires_at, user:{id,email}}
+      const listeners = [];
+
+      const load = () => Store.authSession();
+      const save = (s) => {
+        session = s;
+        Store.saveAuthSession(s);
+        listeners.forEach(fn => { try { fn(s); } catch (e) {} });
+      };
+
+      async function api(path, opts) {
+        opts = opts || {};
+        const headers = Object.assign({
+          "apikey": CLOUD.key,
+          "Content-Type": "application/json",
+        }, opts.headers || {});
+        if (opts.auth !== false) {
+          headers["Authorization"] = "Bearer " + ((session && session.access_token) || CLOUD.key);
+        }
+        const res = await fetch(CLOUD.url + path, Object.assign({}, opts, { headers }));
+        const text = await res.text();
+        let body = null;
+        try { body = text ? JSON.parse(text) : null; } catch (e) { body = text; }
+        if (!res.ok) {
+          const msg = (body && (body.msg || body.message || body.error_description || body.error)) || ("HTTP " + res.status);
+          throw new Error(msg);
+        }
+        return body;
+      }
+
+      /* 回跳地址里带着 #access_token=...，取出来存好，再把地址清干净 —— 
+         不清的话 token 会留在地址栏，复制粘贴就泄露了。 */
+      function captureFromUrl() {
+        const h = location.hash || "";
+        if (!h.includes("access_token=")) return false;
+        const p = new URLSearchParams(h.slice(1));
+        const at = p.get("access_token");
+        if (!at) return false;
+        save({
+          access_token: at,
+          refresh_token: p.get("refresh_token") || "",
+          expires_at: Date.now() + (+(p.get("expires_in") || 3600)) * 1000,
+          user: null,
+        });
+        history.replaceState(null, "", location.pathname + location.search);
+        return true;
+      }
+
+      async function refreshIfNeeded() {
+        if (!session || !session.refresh_token) return;
+        if (Date.now() < session.expires_at - 60000) return;   // 还有一分钟以上就不动
+        try {
+          const r = await api("/auth/v1/token?grant_type=refresh_token", {
+            method: "POST", auth: false,
+            body: JSON.stringify({ refresh_token: session.refresh_token }),
+          });
+          save({
+            access_token: r.access_token,
+            refresh_token: r.refresh_token || session.refresh_token,
+            expires_at: Date.now() + (r.expires_in || 3600) * 1000,
+            user: r.user || session.user,
+          });
+        } catch (e) { save(null); }   // 刷不动就当登出，别卡在半死状态
+      }
+
+      return {
+        get user() { return session && session.user; },
+        get signedIn() { return !!(session && session.access_token); },
+        onChange(fn) { listeners.push(fn); },
+
+        async init() {
+          const got = captureFromUrl();
+          if (!got) session = load();
+          await refreshIfNeeded();
+          if (session && !session.user) {
+            try { save(Object.assign({}, session, { user: await api("/auth/v1/user") })); }
+            catch (e) { save(null); }
+          }
+          return session;
+        },
+
+        /* 无密码：发一封带链接的邮件，点开即登录。不存密码，也就没有密码可泄露。 */
+        async sendMagicLink(email) {
+          return api("/auth/v1/otp", {
+            method: "POST", auth: false,
+            body: JSON.stringify({
+              email: email,
+              create_user: true,
+              options: { email_redirect_to: location.origin + location.pathname },
+            }),
+          });
+        },
+
+        async signOut() {
+          try { await api("/auth/v1/logout", { method: "POST" }); } catch (e) {}
+          save(null);
+        },
+
+        /* 删除账号：数据库里三张表都是 on delete cascade，
+           用户一删，他的作答/错题/生词自动跟着清干净。 */
+        async deleteAccount() {
+          await Cloud.wipe();        // 先把数据行删掉（RLS 保证只删得掉自己的）
+          await this.signOut();
+        },
+
+        api, refreshIfNeeded,
+      };
+    })();
+
+    /* ============ 云同步 ============
+       合并规则和「备份导入」用的是同一套，已经验过：
+       作答按 aid 去重、留 ts 晚的；错题按 qid 取较新；生词按「词+题」去重。
+       所以两台设备各练各的能并到一起，重复同步也不会翻倍。
+
+       没登录时整层空转，本地照常用 —— 登录只是多一层保险，不是前提。 */
+    const Cloud = (() => {
+      let syncing = false;
+
+      const rest = (path, opts) => Auth.api("/rest/v1/" + path, opts);
+
+      /* 本地记录 → 云端行。user_id 不用前端填，数据库从 token 里取 */
+      function rowsFor(table) {
+        if (table === "attempts") {
+          return (attempts || []).filter(a => a && a.aid).map(a => ({
+            aid: a.aid, qid: a.qid, cat: a.cat, sec: a.sec, dom: a.dom, sk: a.sk,
+            df: a.df, bd: a.bd, ty: a.ty, ok: !!a.ok, picked: a.picked,
+            correct: a.correct, ms: a.ms | 0, why: a.why, tag: a.tag, sid: a.sid, ts: a.ts,
+            user_id: Auth.user && Auth.user.id,
+          }));
+        }
+        if (table === "mistakes") {
+          return Object.values(mistakes || {}).filter(m => m && m.qid).map(m => ({
+            qid: m.qid, cat: m.cat, sec: m.sec, dom: m.dom, sk: m.sk,
+            wrong: m.wrong, correct: m.correct, tag: m.tag, detail: m.detail,
+            quadrant: m.quadrant, why: m.why, box: m.box | 0 || 1, due: m.due,
+            mastered: !!m.mastered, ts: m.ts, user_id: Auth.user && Auth.user.id,
+          }));
+        }
+        return (vocabList || []).filter(v => v && v.word).map(v => ({
+          word: v.word, qid: v.qid, skill: v.skill, context: v.context || null,
+          ts: v.ts, user_id: Auth.user && Auth.user.id,
+        }));
+      }
+
+      async function push(table) {
+        const rows = rowsFor(table);
+        if (!rows.length) return 0;
+        // 分批，别一次塞几千行
+        for (let i = 0; i < rows.length; i += 400) {
+          await rest(table, {
+            method: "POST",
+            headers: { "Prefer": "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify(rows.slice(i, i + 400)),
+          });
+        }
+        return rows.length;
+      }
+
+      async function pull() {
+        const [a, m, v] = await Promise.all([
+          rest("attempts?select=*"), rest("mistakes?select=*"), rest("vocab?select=*"),
+        ]);
+        return { attempts: a || [], mistakes: m || [], vocab: v || [] };
+      }
+
+      /* 和备份导入同一套合并规则 */
+      function merge(remote) {
+        const byAid = new Map();
+        [...(attempts || []), ...(remote.attempts || [])].forEach(a => {
+          if (!a || !a.aid) return;
+          const old = byAid.get(a.aid);
+          if (!old || (a.ts || 0) > (old.ts || 0)) byAid.set(a.aid, a);
+        });
+        const addedAtt = byAid.size - (attempts || []).length;
+        attempts = [...byAid.values()].sort((x, y) => (x.ts || 0) - (y.ts || 0));
+
+        const mst = Object.assign({}, mistakes || {});
+        (remote.mistakes || []).forEach(m => {
+          const cur = mst[m.qid];
+          if (!cur || (m.ts || 0) > (cur.ts || 0)) mst[m.qid] = m;
+        });
+        mistakes = mst;
+
+        const seen = new Set((vocabList || []).map(v => (v.word || "") + "|" + (v.qid || "")));
+        const voc = [...(vocabList || [])];
+        (remote.vocab || []).forEach(v => {
+          const k = (v.word || "") + "|" + (v.qid || "");
+          if (!seen.has(k)) { seen.add(k); voc.push(v); }
+        });
+        const addedVoc = voc.length - (vocabList || []).length;
+        vocabList = voc;
+
+        Store.saveAttempts(attempts);
+        Store.saveMistakes(mistakes);
+        Store.saveVocab(vocabList);
+        return { addedAtt, addedVoc };
+      }
+
+      return {
+        get busy() { return syncing; },
+
+        /* 登录后跑一次：先拉下来合并，再把合并结果整个推上去 */
+        async syncAll() {
+          if (!Auth.signedIn || syncing) return null;
+          syncing = true;
+          try {
+            await Auth.refreshIfNeeded();
+            const remote = await pull();
+            const added = merge(remote);
+            await Promise.all([push("attempts"), push("mistakes"), push("vocab")]);
+            return added;
+          } finally { syncing = false; }
+        },
+
+        /* 平时做完一组推一次，失败就算了 —— 本地已经存好，下次登录会补上 */
+        async pushQuiet() {
+          if (!Auth.signedIn || syncing) return;
+          try { await Auth.refreshIfNeeded(); await Promise.all([push("attempts"), push("mistakes"), push("vocab")]); }
+          catch (e) { console.warn("[cloud] 推送失败，本地已保存：", e.message); }
+        },
+
+        async wipe() {
+          const uid = Auth.user && Auth.user.id;
+          if (!uid) return;
+          await Promise.all([
+            rest("attempts?user_id=eq." + uid, { method: "DELETE" }),
+            rest("mistakes?user_id=eq." + uid, { method: "DELETE" }),
+            rest("vocab?user_id=eq." + uid, { method: "DELETE" }),
+          ]);
+        },
+      };
+    })();
+
     /* ============ 存储层 ============
        全站唯一的读写出口。以前 localStorage 调用散落在 12 处，
        结果就是：少写一处没人发现（sat_marks 曾经只读不写），
@@ -804,6 +1119,7 @@
         lastBackup:PREFIX + "last_backup",
         aiKey:     PREFIX + "deepseek_key",
         aiModel:   PREFIX + "deepseek_model",
+        auth:      PREFIX + "session",
       };
 
       let warned = false;
@@ -903,6 +1219,14 @@
         aiModel()    { return raw(K.aiModel, "deepseek-chat") || "deepseek-chat"; },
         saveAi(key, model) { put(K.aiKey, key); put(K.aiModel, model); },
 
+        /* 登录会话也走这里，别让 Auth 自己直接碰 localStorage */
+        authSession()         { return raw(K.auth, null); },
+        saveAuthSession(sess) {
+          if (sess) return put(K.auth, sess);
+          try { localStorage.removeItem(K.auth); } catch (e) {}
+          return true;
+        },
+
         markBackedUp() { return put(K.lastBackup, Date.now()); },
         lastBackup()   { return raw(K.lastBackup, 0) || 0; },
       };
@@ -992,6 +1316,19 @@
                      full.length.toLocaleString() + " 题 (官方原题库)");
         initBank();
         if (typeof refreshBackupNag === "function") refreshBackupNag();
+        // 账号：有历史会话就恢复，magic link 回跳则在这里被接住
+        Auth.init().then(async () => {
+          renderAccount();
+          if (Auth.signedIn) {
+            try {
+              const r = await Cloud.syncAll();
+              if (r && (r.addedAtt || r.addedVoc)) {
+                console.log(`[cloud] 从云端合并了 ${r.addedAtt} 条作答、${r.addedVoc} 个生词`);
+                if (typeof initBank === "function") initBank();
+              }
+            } catch (e) { console.warn("[cloud] 启动同步失败：", e.message); }
+          }
+        }).catch(e => console.warn("[auth] 初始化失败：", e.message));
       } catch (e) {
         fail("载入失败：" + (e && e.message || e),
              location.protocol === "file:"
@@ -1391,6 +1728,99 @@
         btn.appendChild(d);
       } else if (!stale && dot) dot.remove();
       btn.title = stale ? "已经 7 天以上没导出备份了，记录只在这台浏览器里" : "导出备份 / 导入恢复";
+    }
+
+    /* 把用户输入的东西放进 innerHTML 前先转义，否则邮箱里带 < > 就能注入标签 */
+    function esc(x) {
+      return String(x == null ? "" : x).replace(/[&<>"']/g,
+        c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    }
+
+    /* ============ 账号 UI ============ */
+    function openAccountModal() {
+      renderAccount();
+      document.getElementById('modal-account').classList.remove('hidden');
+    }
+
+    function renderAccount() {
+      const inBox = document.getElementById('acct-in');
+      const outBox = document.getElementById('acct-out');
+      const label = document.getElementById('account-label');
+      const on = Auth.signedIn;
+      if (inBox) inBox.classList.toggle('hidden', !on);
+      if (outBox) outBox.classList.toggle('hidden', on);
+      if (label) label.textContent = on ? (Auth.user && Auth.user.email ? "已登录" : "已登录") : "登录";
+      const who = document.getElementById('acct-who');
+      if (who && Auth.user) who.textContent = Auth.user.email || Auth.user.id;
+      const st = document.getElementById('acct-stats');
+      if (st) {
+        const cell = (n, t) => `<div class="bg-slate-50 border border-slate-200 rounded-lg py-2">
+            <div class="text-lg font-extrabold text-slate-900">${n}</div>
+            <div class="text-[11px] text-slate-500">${t}</div></div>`;
+        st.innerHTML = cell(attempts.length, "条作答")
+                     + cell(Object.values(mistakes).filter(m => !m.mastered).length, "待攻克")
+                     + cell(vocabList.length, "个生词");
+      }
+    }
+
+    async function sendLoginLink() {
+      const msg = document.getElementById('acct-msg');
+      const btn = document.getElementById('acct-send');
+      const email = (document.getElementById('acct-email').value || "").trim();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        msg.innerHTML = '<span class="text-rose-600">邮箱格式不对</span>';
+        return;
+      }
+      btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-1.5"></i>发送中…';
+      try {
+        await Auth.sendMagicLink(email);
+        msg.innerHTML = `<span class="text-emerald-700 font-semibold">
+          <i class="fa-solid fa-circle-check mr-1"></i>登录链接已发到 ${esc(email)}，去邮箱点开它（可能在垃圾邮件里）</span>`;
+      } catch (e) {
+        msg.innerHTML = '<span class="text-rose-600">发送失败：' + esc(e.message) + '</span>';
+      } finally {
+        btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-paper-plane mr-1.5"></i>发送登录链接';
+      }
+    }
+
+    async function syncNow() {
+      const msg = document.getElementById('acct-msg2');
+      const btn = document.getElementById('acct-sync');
+      btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin mr-1.5"></i>同步中…';
+      try {
+        const r = await Cloud.syncAll();
+        msg.innerHTML = r
+          ? `<span class="text-emerald-700 font-semibold"><i class="fa-solid fa-circle-check mr-1"></i>同步完成${
+              r.addedAtt || r.addedVoc ? `，从云端合并了 ${r.addedAtt} 条作答、${r.addedVoc} 个生词` : ""}</span>`
+          : '<span class="text-slate-500">没有可同步的内容</span>';
+        renderAccount();
+        if (typeof initBank === "function") initBank();
+      } catch (e) {
+        msg.innerHTML = '<span class="text-rose-600">同步失败：' + esc(e.message) + '</span>';
+      } finally {
+        btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-rotate mr-1.5"></i>立即同步';
+      }
+    }
+
+    async function signOutNow() {
+      await Auth.signOut();
+      renderAccount();
+      document.getElementById('acct-msg').innerHTML =
+        '<span class="text-slate-500">已退出。本机记录仍在，下次登录会自动合并。</span>';
+    }
+
+    async function deleteAccountNow() {
+      if (!confirm("删除账号和云端全部数据？\n\n云端的作答、错题、生词会立刻清空且无法恢复。\n这台浏览器上的本地记录会保留。")) return;
+      if (!confirm("再确认一次：这个操作不可撤销。")) return;
+      const msg = document.getElementById('acct-msg2');
+      try {
+        await Auth.deleteAccount();
+        renderAccount();
+        document.getElementById('acct-msg').innerHTML =
+          '<span class="text-emerald-700">云端数据已清空，账号已退出。</span>';
+      } catch (e) {
+        msg.innerHTML = '<span class="text-rose-600">删除失败：' + esc(e.message) + '</span>';
+      }
     }
 
     // ================= 全真模考启动器 (MOCK RUNNER) =================
@@ -2161,6 +2591,7 @@
 
       Store.saveAttempts(attempts);
       Store.saveMistakes(mistakes);
+      Cloud.pushQuiet();   // 登录了就推一份上去，失败也不影响本地
       Store.clearSession();
 
       initBank();
