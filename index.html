@@ -42,6 +42,8 @@
   #runner-options-group, .nav-btn, button { user-select: none; -webkit-user-select: none; }
   mark.user-hl { background: #fde68a; padding: 0 1px; border-radius: 2px; cursor: pointer; }
   mark.user-hl:hover { background: #fca5a5; }
+  mark.user-kp { background: #dbeafe; border-bottom: 2px solid #3b82f6; padding: 0 1px; border-radius: 2px; cursor: pointer; }
+  mark.user-kp:hover { background: #fecaca; border-bottom-color: #ef4444; }
 </style>
 </head>
 <body class="bg-[#f6f7f3] text-slate-800 antialiased min-h-screen flex flex-col font-sans">
@@ -408,8 +410,9 @@
           <div class="flex items-center justify-between pb-3 mb-4 border-b border-slate-100 text-xs font-semibold text-slate-400 uppercase tracking-wider">
             <span>Passage / Context</span>
             <span id="hl-bar" class="hidden normal-case font-normal text-[11px] text-amber-700">
-              <i class="fa-solid fa-highlighter mr-1"></i>本题 <b id="hl-count">0</b> 条高亮
-              <button onclick="clearQuestionHighlights()" class="ml-1.5 underline hover:text-rose-600">全部擦除</button>
+              <i class="fa-solid fa-highlighter mr-1"></i>高亮 <b id="hl-count">0</b> 条
+              <button id="hl-clear" onclick="clearQuestionHighlights()" class="ml-1 underline hover:text-rose-600">擦除</button>
+              <span id="kp-note" class="hidden ml-2 text-sky-700"><i class="fa-solid fa-star mr-0.5"></i>重点 <b id="kp-count">0</b> 条</span>
             </span>
             <span class="text-slate-400 normal-case italic font-normal text-[11px]">划选文字可【高亮】或【加入生词本】</span>
           </div>
@@ -421,6 +424,13 @@
             </button>
             <button onclick="eraseHighlightAtSelection()" id="pop-erase" class="hidden hover:text-rose-300 flex items-center space-x-1 px-1">
               <i class="fa-solid fa-eraser"></i> <span>擦除</span>
+            </button>
+            <span class="text-slate-600">|</span>
+            <button onclick="saveSelectedAsKeypoint()" id="pop-kp" class="hover:text-sky-300 flex items-center space-x-1 px-1">
+              <i class="fa-solid fa-star"></i> <span>重点</span>
+            </button>
+            <button onclick="unsaveKeypointAtSelection()" id="pop-unkp" class="hidden hover:text-rose-300 flex items-center space-x-1 px-1">
+              <i class="fa-regular fa-star"></i> <span>取消重点</span>
             </button>
             <span class="text-slate-600">|</span>
             <button onclick="addSelectedToVocab()" class="hover:text-emerald-300 flex items-center space-x-1 px-1">
@@ -789,6 +799,7 @@
         vocab:     PREFIX + "vocab",
         highlights:PREFIX + "highlights",   // {sid:{qid:[被高亮的字符串]}} —— 本场有效
         notes:     PREFIX + "notes",        // {qid:{text, ts}}
+        keypoints: PREFIX + "keypoints",    // {qid:[{text, ts}]} —— 永久跟着题，不随场次
         session:   PREFIX + "active_session",
         lastBackup:PREFIX + "last_backup",
         aiKey:     PREFIX + "deepseek_key",
@@ -856,6 +867,28 @@
           const all = raw(K.highlights, {});
           delete all[sid];
           return put(K.highlights, all);
+        },
+
+        /* 重点：和高亮不一样 —— 高亮随场次走、可擦；重点永久跟着这道题，
+           下次再刷到同一题会自动标出来，是「我当时觉得这里重要」的长期笔记。 */
+        keypointsFor(qid) { return raw(K.keypoints, {})[qid] || []; },
+        addKeypoint(qid, text) {
+          const all = raw(K.keypoints, {});
+          const list = all[qid] = all[qid] || [];
+          if (!list.some(k => k.text === text)) list.push({ text, ts: Date.now() });
+          return put(K.keypoints, all);
+        },
+        removeKeypoint(qid, text) {
+          const all = raw(K.keypoints, {});
+          if (!all[qid]) return false;
+          all[qid] = all[qid].filter(k => k.text !== text);
+          if (!all[qid].length) delete all[qid];
+          return put(K.keypoints, all);
+        },
+        allKeypoints() { return raw(K.keypoints, {}); },
+        keypointCount() {
+          const all = raw(K.keypoints, {});
+          return Object.values(all).reduce((n, list) => n + list.length, 0);
         },
 
         note(qid) { return raw(K.notes, {})[qid] || null; },
@@ -1819,12 +1852,16 @@
       if (txt.length >= 2 && leftPane.contains(sel.anchorNode)) {
         currentSelectedText = txt;
         // 选中的内容若已经在高亮里，就把「擦除」亮出来
-        const hit = Store.highlightsFor(currentSid(), currentQid())
-                         .some(h => h.includes(txt) || txt.includes(h));
-        const eraseBtn = document.getElementById('pop-erase');
-        const hlBtn = document.getElementById('pop-hl');
-        if (eraseBtn) eraseBtn.classList.toggle('hidden', !hit);
-        if (hlBtn) hlBtn.classList.toggle('hidden', hit);
+        const qid = currentQid();
+        const isHl = Store.highlightsFor(currentSid(), qid)
+                          .some(h => h.includes(txt) || txt.includes(h));
+        const isKp = Store.keypointsFor(qid)
+                          .some(k => k.text.includes(txt) || txt.includes(k.text));
+        const tog = (id, hide) => { const e = document.getElementById(id); if (e) e.classList.toggle('hidden', hide); };
+        tog('pop-hl',   isHl);      // 已高亮就只给「擦除」
+        tog('pop-erase', !isHl);
+        tog('pop-kp',   isKp);      // 已是重点就只给「取消重点」
+        tog('pop-unkp', !isKp);
         pop.classList.remove('hidden');
         pop.style.top = (e.pageY - 40) + "px";
         pop.style.left = Math.min(window.innerWidth - 160, Math.max(20, e.pageX - 60)) + "px";
@@ -1873,6 +1910,29 @@
       window.getSelection().removeAllRanges();
     }
 
+    /* 重点：和高亮的区别是「永久跟着这道题」。
+       下次新开一组再刷到同一题，高亮是干净的，重点还在。 */
+    function saveSelectedAsKeypoint() {
+      document.getElementById('selection-popover').classList.add('hidden');
+      const txt = (window.getSelection().toString() || "").trim();
+      if (!txt || txt.length < 2) return;
+      Store.addKeypoint(currentQid(), txt);
+      applyHighlights();
+      window.getSelection().removeAllRanges();
+    }
+
+    function unsaveKeypointAtSelection() {
+      document.getElementById('selection-popover').classList.add('hidden');
+      const txt = (window.getSelection().toString() || "").trim();
+      if (!txt) return;
+      const qid = currentQid();
+      Store.keypointsFor(qid)
+        .filter(k => k.text.includes(txt) || txt.includes(k.text))
+        .forEach(k => Store.removeKeypoint(qid, k.text));
+      applyHighlights();
+      window.getSelection().removeAllRanges();
+    }
+
     function clearQuestionHighlights() {
       const sid = currentSid(), qid = currentQid();
       if (!Store.highlightsFor(sid, qid).length) return;
@@ -1885,19 +1945,23 @@
     function applyHighlights() {
       const pane = document.getElementById('runner-passage');
       if (!pane) return;
-      const list = Store.highlightsFor(currentSid(), currentQid())
-                        .slice().sort((a, b) => b.length - a.length);
+      const qid = currentQid();
+      // 两种标注一起套：重点先套（永久、底层），高亮后套（本场、可擦）
+      const kps = Store.keypointsFor(qid).map(k => ({ text: k.text, kind: "kp" }));
+      const hls = Store.highlightsFor(currentSid(), qid).map(t => ({ text: t, kind: "hl" }));
+      const list = kps.concat(hls).sort((a, b) => b.text.length - a.text.length);
       // 先还原成干净原文，再逐条套
       const q = activeSession && activeSession.questions[activeSession.currentIndex];
       if (!q) return;
       pane.innerHTML = q.sti || "";
-      list.forEach(text => wrapTextInNode(pane, text));
+      list.forEach(item => wrapTextInNode(pane, item.text, item.kind));
       renderHighlightBar();
     }
 
     /* 只在文本节点上找，不碰标签，避免把 <svg> 之类打烂 */
-    function wrapTextInNode(root, text) {
+    function wrapTextInNode(root, text, kind) {
       if (!text) return;
+      kind = kind || "hl";
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
       const hits = [];
       let n;
@@ -1909,11 +1973,12 @@
         const after = node.splitText(index);
         after.splitText(text.length);
         const mark = document.createElement("mark");
-        mark.className = "user-hl";
-        mark.title = "点一下取消这条高亮";
+        mark.className = kind === "kp" ? "user-kp" : "user-hl";
+        mark.title = kind === "kp" ? "⭐ 重点（永久保留）—— 点一下取消" : "点一下取消这条高亮";
         mark.onclick = (e) => {
           e.stopPropagation();
-          Store.removeHighlight(currentSid(), currentQid(), text);
+          if (kind === "kp") Store.removeKeypoint(currentQid(), text);
+          else Store.removeHighlight(currentSid(), currentQid(), text);
           applyHighlights();
         };
         after.parentNode.replaceChild(mark, after);
@@ -1925,10 +1990,20 @@
     function renderHighlightBar() {
       const bar = document.getElementById('hl-bar');
       if (!bar) return;
-      const n = Store.highlightsFor(currentSid(), currentQid()).length;
-      bar.classList.toggle('hidden', n === 0);
+      const qid = currentQid();
+      const n = Store.highlightsFor(currentSid(), qid).length;
+      const k = Store.keypointsFor(qid).length;
+      bar.classList.toggle('hidden', n === 0 && k === 0);
       const cnt = document.getElementById('hl-count');
       if (cnt) cnt.textContent = n;
+      const kpEl = document.getElementById('kp-note');
+      if (kpEl) {
+        kpEl.classList.toggle('hidden', k === 0);
+        const kc = document.getElementById('kp-count');
+        if (kc) kc.textContent = k;
+      }
+      const clr = document.getElementById('hl-clear');
+      if (clr) clr.classList.toggle('hidden', n === 0);
     }
 
     function addSelectedToVocab() {
