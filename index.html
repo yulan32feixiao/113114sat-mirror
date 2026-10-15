@@ -40,6 +40,8 @@
      现在只在阅读材料和题干放开，按钮/选项这类交互件仍然禁止选中。 */
   #runner-passage, #runner-prompt, #rationale-text, .selectable { user-select: text; -webkit-user-select: text; }
   #runner-options-group, .nav-btn, button { user-select: none; -webkit-user-select: none; }
+  mark.user-hl { background: #fde68a; padding: 0 1px; border-radius: 2px; cursor: pointer; }
+  mark.user-hl:hover { background: #fca5a5; }
 </style>
 </head>
 <body class="bg-[#f6f7f3] text-slate-800 antialiased min-h-screen flex flex-col font-sans">
@@ -405,14 +407,25 @@
         <div class="bg-white rounded-xl border border-slate-300 p-6 flex flex-col shadow-xs overflow-y-auto relative" id="left-pane-wrap">
           <div class="flex items-center justify-between pb-3 mb-4 border-b border-slate-100 text-xs font-semibold text-slate-400 uppercase tracking-wider">
             <span>Passage / Context</span>
+            <span id="hl-bar" class="hidden normal-case font-normal text-[11px] text-amber-700">
+              <i class="fa-solid fa-highlighter mr-1"></i>本题 <b id="hl-count">0</b> 条高亮
+              <button onclick="clearQuestionHighlights()" class="ml-1.5 underline hover:text-rose-600">全部擦除</button>
+            </span>
             <span class="text-slate-400 normal-case italic font-normal text-[11px]">划选文字可【高亮】或【加入生词本】</span>
           </div>
 
           <!-- 划词气泡工具栏 (Selection Popover) -->
-          <div id="selection-popover" class="hidden absolute z-30 bg-slate-900 text-white rounded-lg shadow-xl px-2 py-1 flex items-center space-x-2 text-xs">
-            <button onclick="highlightSelection()" class="hover:text-amber-300 flex items-center space-x-1"><i class="fa-solid fa-highlighter"></i> <span>高亮</span></button>
+          <div id="selection-popover" class="hidden absolute z-30 bg-slate-900 text-white rounded-lg shadow-xl px-2 py-1 flex items-center space-x-2 text-xs whitespace-nowrap">
+            <button onclick="highlightSelection()" id="pop-hl" class="hover:text-amber-300 flex items-center space-x-1 px-1">
+              <i class="fa-solid fa-highlighter"></i> <span>高亮</span>
+            </button>
+            <button onclick="eraseHighlightAtSelection()" id="pop-erase" class="hidden hover:text-rose-300 flex items-center space-x-1 px-1">
+              <i class="fa-solid fa-eraser"></i> <span>擦除</span>
+            </button>
             <span class="text-slate-600">|</span>
-            <button onclick="addSelectedToVocab()" class="hover:text-emerald-300 flex items-center space-x-1"><i class="fa-solid fa-plus"></i> <span>添生词</span></button>
+            <button onclick="addSelectedToVocab()" class="hover:text-emerald-300 flex items-center space-x-1 px-1">
+              <i class="fa-solid fa-plus"></i> <span>生词</span>
+            </button>
           </div>
 
           <div id="runner-passage" class="text-sm leading-relaxed text-slate-800 font-serif space-y-4">
@@ -1672,6 +1685,8 @@
         body.classList.toggle('max-w-3xl', !hasPassage);
       }
       pEl.innerHTML = hasPassage ? q.sti : '';
+      if (hasPassage) applyHighlights();   // 本场画过的线重新套回来
+      else renderHighlightBar();
 
       // 右栏题干
       document.getElementById('runner-prompt').innerHTML = q.ste;
@@ -1803,6 +1818,13 @@
       const pop = document.getElementById('selection-popover');
       if (txt.length >= 2 && leftPane.contains(sel.anchorNode)) {
         currentSelectedText = txt;
+        // 选中的内容若已经在高亮里，就把「擦除」亮出来
+        const hit = Store.highlightsFor(currentSid(), currentQid())
+                         .some(h => h.includes(txt) || txt.includes(h));
+        const eraseBtn = document.getElementById('pop-erase');
+        const hlBtn = document.getElementById('pop-hl');
+        if (eraseBtn) eraseBtn.classList.toggle('hidden', !hit);
+        if (hlBtn) hlBtn.classList.toggle('hidden', hit);
         pop.classList.remove('hidden');
         pop.style.top = (e.pageY - 40) + "px";
         pop.style.left = Math.min(window.innerWidth - 160, Math.max(20, e.pageX - 60)) + "px";
@@ -1811,16 +1833,102 @@
       }
     });
 
+    /* ============ 划词高亮 ============
+       以前只是往 DOM 里塞一个 <mark> 就完事，不存任何地方，
+       翻一道题 innerHTML 重建就全没了 —— 等于白画。
+
+       现在高亮存成「字符串」（不是 DOM），重绘后按文本重新套上。
+       存储键是「场次 sid + 题目 qid」：本场翻来翻去、刷新都在，
+       下次新开一组再遇到同一题是干净的 —— 画过的线属于那一次，不属于那道题。 */
+    function currentSid() {
+      return (activeSession && activeSession.sid) || "nosid";
+    }
+    function currentQid() {
+      if (!activeSession) return "";
+      const q = activeSession.questions[activeSession.currentIndex];
+      return q ? q.id : "";
+    }
+
     function highlightSelection() {
       document.getElementById('selection-popover').classList.add('hidden');
       const sel = window.getSelection();
-      if (!sel.rangeCount) return;
-      const range = sel.getRangeAt(0);
-      const span = document.createElement("mark");
-      span.className = "user-hl";
-      span.appendChild(range.extractContents());
-      range.insertNode(span);
+      const txt = sel.toString().trim();
+      if (!txt || txt.length < 2) return;
+      Store.addHighlight(currentSid(), currentQid(), txt);
+      applyHighlights();
       sel.removeAllRanges();
+    }
+
+    /* 擦除：选中一段已高亮的文字点擦除，或在 mark 上点一下也行 */
+    function eraseHighlightAtSelection() {
+      document.getElementById('selection-popover').classList.add('hidden');
+      const txt = (window.getSelection().toString() || "").trim();
+      if (!txt) return;
+      const sid = currentSid(), qid = currentQid();
+      // 选中的可能只是某条高亮的一部分，把包含它的那几条都去掉
+      Store.highlightsFor(sid, qid)
+        .filter(h => h.includes(txt) || txt.includes(h))
+        .forEach(h => Store.removeHighlight(sid, qid, h));
+      applyHighlights();
+      window.getSelection().removeAllRanges();
+    }
+
+    function clearQuestionHighlights() {
+      const sid = currentSid(), qid = currentQid();
+      if (!Store.highlightsFor(sid, qid).length) return;
+      Store.clearHighlights(sid, qid);
+      applyHighlights();
+      renderHighlightBar();
+    }
+
+    /* 把存着的字符串重新套回原文。长的先套，避免短串把长串拆散。 */
+    function applyHighlights() {
+      const pane = document.getElementById('runner-passage');
+      if (!pane) return;
+      const list = Store.highlightsFor(currentSid(), currentQid())
+                        .slice().sort((a, b) => b.length - a.length);
+      // 先还原成干净原文，再逐条套
+      const q = activeSession && activeSession.questions[activeSession.currentIndex];
+      if (!q) return;
+      pane.innerHTML = q.sti || "";
+      list.forEach(text => wrapTextInNode(pane, text));
+      renderHighlightBar();
+    }
+
+    /* 只在文本节点上找，不碰标签，避免把 <svg> 之类打烂 */
+    function wrapTextInNode(root, text) {
+      if (!text) return;
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+      const hits = [];
+      let n;
+      while ((n = walker.nextNode())) {
+        const i = n.nodeValue.indexOf(text);
+        if (i >= 0) hits.push({ node: n, index: i });
+      }
+      hits.forEach(({ node, index }) => {
+        const after = node.splitText(index);
+        after.splitText(text.length);
+        const mark = document.createElement("mark");
+        mark.className = "user-hl";
+        mark.title = "点一下取消这条高亮";
+        mark.onclick = (e) => {
+          e.stopPropagation();
+          Store.removeHighlight(currentSid(), currentQid(), text);
+          applyHighlights();
+        };
+        after.parentNode.replaceChild(mark, after);
+        mark.appendChild(document.createTextNode(text));
+      });
+    }
+
+    /* 原文栏顶部显示「本题 N 条高亮 · 全部擦除」 */
+    function renderHighlightBar() {
+      const bar = document.getElementById('hl-bar');
+      if (!bar) return;
+      const n = Store.highlightsFor(currentSid(), currentQid()).length;
+      bar.classList.toggle('hidden', n === 0);
+      const cnt = document.getElementById('hl-count');
+      if (cnt) cnt.textContent = n;
     }
 
     function addSelectedToVocab() {
