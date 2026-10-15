@@ -761,14 +761,109 @@
     // 不内置样题兜底 —— 静默降级到几十道题，会让人以为在刷全库。
     let BANK = [];
     let BYID = {};
-    // 本地存储：四样数据，键名一律 sat_*。没有就是空的，打开即用。
-    function loadUserData() {
-      const get = (k, dflt) => { try { return JSON.parse(localStorage.getItem(k)) ?? dflt; } catch(e) { return dflt; } };
-      return {
-        att: get("sat_attempts", []),
-        mst: get("sat_mistakes", {}),
-        vcb: get("sat_vocab",    []),
+    /* ============ 存储层 ============
+       全站唯一的读写出口。以前 localStorage 调用散落在 12 处，
+       结果就是：少写一处没人发现（sat_marks 曾经只读不写），
+       要加一种新数据（高亮、笔记）得翻遍全文找存盘点，
+       要接云同步得改 12 个地方。
+
+       现在所有数据走 Store。以后接 Supabase，只需要在 set() 里多一行推送。 */
+    const Store = (() => {
+      const PREFIX = "sat_";
+      const K = {
+        attempts:  PREFIX + "attempts",
+        mistakes:  PREFIX + "mistakes",
+        vocab:     PREFIX + "vocab",
+        highlights:PREFIX + "highlights",   // {sid:{qid:[被高亮的字符串]}} —— 本场有效
+        notes:     PREFIX + "notes",        // {qid:{text, ts}}
+        session:   PREFIX + "active_session",
+        lastBackup:PREFIX + "last_backup",
+        aiKey:     PREFIX + "deepseek_key",
+        aiModel:   PREFIX + "deepseek_model",
       };
+
+      let warned = false;
+      function raw(k, dflt) {
+        try { const v = localStorage.getItem(k); return v == null ? dflt : JSON.parse(v); }
+        catch (e) { return dflt; }
+      }
+      function put(k, v) {
+        try { localStorage.setItem(k, JSON.stringify(v)); return true; }
+        catch (e) {
+          if (!warned) { warned = true; console.warn("[store] 浏览器存储写满，新记录没能保存"); }
+          return false;
+        }
+      }
+
+      return {
+        K,
+        get: raw,
+        set: put,
+        /* 下面是带语义的入口，调用方不该再直接碰 localStorage */
+        loadAll() {
+          return {
+            att: raw(K.attempts, []),
+            mst: raw(K.mistakes, {}),
+            vcb: raw(K.vocab, []),
+          };
+        },
+        saveAttempts(list) { return put(K.attempts, (list || []).slice(-2000)); },
+        saveMistakes(obj)  { return put(K.mistakes, obj || {}); },
+        saveVocab(list)    { return put(K.vocab, (list || []).slice(-2000)); },
+        saveSession(s)     { return put(K.session, s); },
+        loadSession()      { return raw(K.session, null); },
+        clearSession()     { try { localStorage.removeItem(K.session); } catch (e) {} },
+
+        /* 高亮按「场次 + 题目」存：本场翻来翻去都在、刷新还在，
+           但下次新开一组再遇到同一题是干净的 —— 画过的线属于那一次，不属于那道题。 */
+        highlightsFor(sid, qid) { return (raw(K.highlights, {})[sid] || {})[qid] || []; },
+        addHighlight(sid, qid, text) {
+          const all = raw(K.highlights, {});
+          const bySid = all[sid] = all[sid] || {};
+          const list = bySid[qid] = bySid[qid] || [];
+          if (!list.includes(text)) list.push(text);
+          return put(K.highlights, all);
+        },
+        removeHighlight(sid, qid, text) {
+          const all = raw(K.highlights, {});
+          if (!all[sid] || !all[sid][qid]) return false;
+          all[sid][qid] = all[sid][qid].filter(t => t !== text);
+          if (!all[sid][qid].length) delete all[sid][qid];
+          if (!Object.keys(all[sid]).length) delete all[sid];
+          return put(K.highlights, all);
+        },
+        clearHighlights(sid, qid) {
+          const all = raw(K.highlights, {});
+          if (all[sid]) { delete all[sid][qid]; if (!Object.keys(all[sid]).length) delete all[sid]; }
+          return put(K.highlights, all);
+        },
+        /* 交卷后只保留「这题画过线」这个事实给报告用，正文不留 */
+        highlightedQidsIn(sid) { return Object.keys(raw(K.highlights, {})[sid] || {}); },
+        dropSessionHighlights(sid) {
+          const all = raw(K.highlights, {});
+          delete all[sid];
+          return put(K.highlights, all);
+        },
+
+        note(qid) { return raw(K.notes, {})[qid] || null; },
+        saveNote(qid, text) {
+          const all = raw(K.notes, {});
+          if (text && text.trim()) all[qid] = { text: text.trim(), ts: Date.now() };
+          else delete all[qid];
+          return put(K.notes, all);
+        },
+
+        aiKey()      { return raw(K.aiKey, "") || ""; },
+        aiModel()    { return raw(K.aiModel, "deepseek-chat") || "deepseek-chat"; },
+        saveAi(key, model) { put(K.aiKey, key); put(K.aiModel, model); },
+
+        markBackedUp() { return put(K.lastBackup, Date.now()); },
+        lastBackup()   { return raw(K.lastBackup, 0) || 0; },
+      };
+    })();
+
+    function loadUserData() {
+      return Store.loadAll();
     }
 
     const _saved = loadUserData();
@@ -1128,14 +1223,13 @@
     const BACKUP_FORMAT = "sat-pp-backup";
 
     function collectBackup() {
-      const get = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } };
       return {
         _format: BACKUP_FORMAT,
         _version: 1,
         exportedAt: new Date().toISOString(),
-        attempts: get("sat_attempts", []),
-        mistakes: get("sat_mistakes", {}),
-        vocab:    get("sat_vocab", []),
+        attempts: Store.get(Store.K.attempts, []),
+        mistakes: Store.get(Store.K.mistakes, {}),
+        vocab:    Store.get(Store.K.vocab, []),
       };
     }
 
@@ -1171,7 +1265,7 @@
       a.download = "SAT练习备份-" + new Date().toISOString().slice(0, 10) + ".json";
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-      try { localStorage.setItem("sat_last_backup", String(Date.now())); } catch (e) {}
+      Store.markBackedUp();
       const msg = document.getElementById('backup-msg');
       if (msg) msg.innerHTML = `<span class="text-emerald-700 font-semibold"><i class="fa-solid fa-circle-check mr-1"></i>已导出 ${b.attempts.length} 条作答</span>`;
       refreshBackupNag();
@@ -1220,9 +1314,9 @@
 
         attempts = mergedAtt; mistakes = mergedMst; vocabList = mergedVocab;
         try {
-          localStorage.setItem("sat_attempts", JSON.stringify(attempts.slice(-2000)));
-          localStorage.setItem("sat_mistakes", JSON.stringify(mistakes));
-          localStorage.setItem("sat_vocab", JSON.stringify(vocabList));
+          Store.saveAttempts(attempts);
+          Store.saveMistakes(mistakes);
+          Store.saveVocab(vocabList);
         } catch (e) {
           return say('<span class="text-rose-600">浏览器存储写满了，没能保存。先导出一份再清理。</span>');
         }
@@ -1239,8 +1333,7 @@
       const btn = document.getElementById('btn-backup');
       if (!btn) return;
       const n = (attempts || []).length;
-      let last = 0;
-      try { last = +localStorage.getItem("sat_last_backup") || 0; } catch (e) {}
+      const last = Store.lastBackup();
       const stale = n >= 50 && (Date.now() - last) > 7 * 86400000;
       btn.classList.toggle('border-rose-300', stale);
       btn.classList.toggle('bg-rose-50', stale);
@@ -1485,7 +1578,7 @@
 
     function initRunnerSession(session) {
       activeSession = session;
-      localStorage.setItem('sat_active_session', JSON.stringify(activeSession));
+      Store.saveSession(activeSession);
       switchView('runner');
 
       document.getElementById('runner-title').innerText = session.title;
@@ -1542,7 +1635,7 @@
       }
       activeSession.currentIndex = index;
       activeSession.questionT0 = Date.now();
-      localStorage.setItem('sat_active_session', JSON.stringify(activeSession));
+      Store.saveSession(activeSession);
 
       const q = activeSession.questions[index];
       const ans = activeSession.answers[index];
@@ -1741,7 +1834,7 @@
         ts: Date.now()
       };
       vocabList.push(item);
-      localStorage.setItem('sat_vocab', JSON.stringify(vocabList));
+      Store.saveVocab(vocabList);
       document.getElementById('vocab-count-badge').innerText = vocabList.length;
       alert(`已成功将词汇 "${currentSelectedText}" 收录至生词本！`);
     }
@@ -1883,9 +1976,9 @@
         }
       });
 
-      localStorage.setItem("sat_attempts", JSON.stringify(attempts.slice(-2000)));
-      localStorage.setItem("sat_mistakes", JSON.stringify(mistakes));
-      localStorage.removeItem("sat_active_session");
+      Store.saveAttempts(attempts);
+      Store.saveMistakes(mistakes);
+      Store.clearSession();
 
       initBank();
       const rate = Math.round((okCount / activeSession.questions.length) * 100);
@@ -1896,7 +1989,7 @@
     function quitRunnerConfirm() {
       if (confirm("确定退出当前作答吗？退出将不会记录本次练习。")) {
         if (timerT) clearInterval(timerT);
-        localStorage.removeItem('sat_active_session');
+        Store.clearSession();
         switchView('dashboard');
       }
     }
@@ -2030,7 +2123,7 @@
 
     function deleteVocabItem(idx) {
       vocabList.splice(idx, 1);
-      localStorage.setItem('sat_vocab', JSON.stringify(vocabList));
+      Store.saveVocab(vocabList);
       document.getElementById('vocab-count-badge').innerText = vocabList.length;
       renderVocabView();
     }
@@ -2133,10 +2226,10 @@
     
     // ================= DeepSeek AI 引擎与只读权限机制 =================
     function getDeepSeekKey() {
-      return localStorage.getItem('sat_deepseek_key') || '';
+      return Store.aiKey();
     }
     function getDeepSeekModel() {
-      return localStorage.getItem('sat_deepseek_model') || 'deepseek-chat';
+      return Store.aiModel();
     }
 
     function openAiSettings() {
@@ -2148,8 +2241,7 @@
     function saveAiSettings() {
       const key = document.getElementById('input-deepseek-key').value.trim();
       const model = document.getElementById('select-deepseek-model').value;
-      localStorage.setItem('sat_deepseek_key', key);
-      localStorage.setItem('sat_deepseek_model', model);
+      Store.saveAi(key, model);
       closeModal('modal-ai-settings');
       alert("DeepSeek API 配置已保存！");
     }
@@ -2370,18 +2462,15 @@ ${questionText}
       loadFullBank();
 
       // 自动恢复未完成会话
-      const cached = localStorage.getItem('sat_active_session');
-      if (cached) {
-        try {
-          const s = JSON.parse(cached);
-          if (confirm(`检测到你有尚未提交的【${s.title}】作答进度，是否恢复现场继续答题？`)) {
-            initRunnerSession(s);
-          } else {
-            localStorage.removeItem('sat_active_session');
-          }
-        } catch(e) {
-          localStorage.removeItem('sat_active_session');
+      const cached = Store.loadSession();
+      if (cached && cached.questions) {
+        if (confirm(`检测到你有尚未提交的【${cached.title}】作答进度，是否恢复现场继续答题？`)) {
+          initRunnerSession(cached);
+        } else {
+          Store.clearSession();
         }
+      } else if (cached) {
+        Store.clearSession();   // 残缺的会话直接丢掉，别卡在恢复弹窗上
       }
     });
   </script>
